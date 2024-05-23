@@ -1,0 +1,11 @@
+Mean Deviations:
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 0: 39.9023087370132
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 1: 83.57080354465539
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 2: 279.09827044536553
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 3: 158.79708239521997
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 4: 137.37574470231414
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 5: 80.21331138995521
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 6: 144.74283780269005
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 7: 155.89502297141559
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 8: 175.71596446867258
+Mean Deviation for PICNN_predictedtime10s_loss=1xPhysicsLoss+MSE_lr=0.001_epoch100_batch32_channels=16, Data 9: 175.3700870801713
