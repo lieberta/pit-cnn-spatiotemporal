@@ -9,6 +9,7 @@ import math
 import time
 import os # to check if a plot already exists
 import json
+import torch.profiler
 
 ######################################
 # physical contrains to make sure, that the temporal deviation and the spatial deviation has been
@@ -16,7 +17,7 @@ import json
 
 # This layer calculates the spatial deviation
 class Laplacian3DLayer(nn.Module):
-    def __init__(self):
+    def __init__(self, device):
         super(Laplacian3DLayer, self).__init__()
         # Define a 3D Laplacian kernel focusing on direct neighbors
         self.laplace_kernel_3d = torch.tensor([[[[[0, 0, 0],
@@ -28,19 +29,20 @@ class Laplacian3DLayer(nn.Module):
                                                  [[0, 0, 0],
                                                   [0, 1, 0],
                                                   [0, 0, 0]]]]],
-                                               dtype=torch.float64, requires_grad=False).to('cuda')
+                                               dtype=torch.float64, requires_grad=False).to(device)
 
     def forward(self, x):
         # Assuming x is of shape [batch, channel, depth, height, width]
         laplacian_3d = F.conv3d(x, self.laplace_kernel_3d, padding=1, groups=x.shape[1])
         return laplacian_3d
 
+
 class HeatEquationLoss(nn.Module):
-    def __init__(self, alpha = 0.0257, delta_t = 3., source_intensity=100000.0):
-        super(HeatEquationLoss, self).__init__()
+    def __init__(self, device, alpha = 0.0257, delta_t = 3., source_intensity=100000.0):
+        super(HeatEquationLoss, self).__init__(device)
         self.alpha = alpha
         self.delta_t = delta_t
-        self.laplacian_layer = Laplacian3DLayer()
+        self.laplacian_layer = Laplacian3DLayer(device)
         self.source_intensity = source_intensity
 
     def temporal_derivative(self, u_next, u_current):
@@ -73,17 +75,66 @@ class HeatEquationLoss(nn.Module):
         # Compute the heat equation loss
         loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
         return loss
-
-
 class CombinedLoss(nn.Module):
     def __init__(self, a, predicted_time, device):
         super(CombinedLoss, self).__init__()
         self.predicted_time = predicted_time
         self.mse_loss = nn.MSELoss().to(device)
-        self.physics_loss = HeatEquationLoss(delta_t= predicted_time).to(device)  # Assuming this is a custom class you've defined
+        self.physics_loss = HeatEquationLoss(delta_t= predicted_time,device=device).to(device)  # Assuming this is a custom class you've defined
         self.a = a
     def forward(self, current_input, output, target):
         return self.mse_loss(output, target) + self.a*self.physics_loss(current_input, output)
+
+
+
+class CombinedLoss_dynamic(nn.Module):
+    # physics enhanced loss for the dynamic method pecnn_dynamic
+    def __init__(self, a, device, alpha = 0.0257, source_intensity=100000.0):
+        super(CombinedLoss_dynamic, self).__init__()
+        self.alpha = alpha
+        self.laplacian_layer = Laplacian3DLayer(device)
+        self.source_intensity = source_intensity
+
+        #self.predicted_time = predicted_time predicted time muss aus dem current_input gezogen werden
+
+        self.mse_loss = nn.MSELoss().to(device)
+        #self.physics_loss = HeatEquationLoss(delta_t=predicted_time).to(
+            #device)  # Assuming this is a custom class you've defined
+        self.a = a
+
+    def temporal_derivative(self, input, t, output):
+        # expand the tensor with the time value (for a whole batch) to match output dimensions
+        t = t.view(t.size(0), t.size(1), 1, 1, 1).expand_as(output)
+        return (output - input) / t
+
+    def create_source_term(self, input_tensor):
+        # Create a mask of where input_tensor is greater than 1000
+        mask = input_tensor > 1000
+
+        # Initialize the source_term tensor with zeros of the same shape as input_tensor
+        source_term = torch.zeros_like(input_tensor)
+
+        # Apply source_intensity at positions where mask is True
+        source_term[mask] = self.source_intensity
+
+        return source_term
+
+    def forward(self, input, t, output, target):
+
+        # Calculate the temporal derivative
+        temporal_derivative = self.temporal_derivative(input, t, output)
+
+        # Calculate the Laplacian
+        laplacian = self.laplacian_layer(input)
+
+        # Create the source term
+        source_term = self.create_source_term(input)
+
+        # Compute the heat equation loss
+        p_loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
+
+        # return the weighted combination of mse and physics_loss
+        return self.mse_loss(output, target) + self.a * p_loss
 
 # Loss function
 class Binarycross_physics(nn.Module):
@@ -266,6 +317,93 @@ class BaseModel(nn.Module):
         # Save the dictionary to a text file in JSON format
         with open(filename, 'w') as file:
             json.dump(losses_data, file)
+
+class BaseModel_dynamic(BaseModel):
+    def __init__(self, loss_fn):
+        super(BaseModel_dynamic, self).__init__(loss_fn=loss_fn)
+    def train_model(self, dataset, num_epochs, batch_size, learning_rate, model_name, save_path):
+        tic = time.perf_counter()  # Start time
+
+        device = ("cuda" if torch.cuda.is_available() else "cpu")
+        print("Device = " + device)
+        self.to(device)
+        self.double()
+
+        train_losses = []
+        val_losses = []
+
+        shuffle = True
+        pin_memory = True
+        num_workers = 1
+
+        train_set, val_set = torch.utils.data.random_split(dataset, [math.ceil(len(dataset) * 0.8),
+                                                                    math.floor(len(dataset) * 0.2)])
+        train_loader = DataLoader(dataset=train_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers,
+                                  pin_memory=pin_memory)
+        val_loader = DataLoader(dataset=val_set, shuffle=shuffle, batch_size=batch_size,
+                                num_workers=num_workers, pin_memory=pin_memory)
+
+        criterion = self.loss_fn.to(device)
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+
+        for epoch in range(num_epochs):
+            train_loss = 0.0
+            val_loss = 0.0
+
+            self.train()
+            loop = tqdm(train_loader, total=len(train_loader), leave=True)
+            for i, (input_tuple, target) in enumerate(loop):
+                # for dynamic systems we use a dynamic dataloader where the input consists of tensor at time0 + t(forecasted time) and targettensor at time t
+
+                input, t = input_tuple
+                input = input.to(device)
+                t = t.to(device)
+
+                target = target.to(device)
+                output = self(input.double(), t)
+
+                if isinstance(self.loss_fn, CombinedLoss_dynamic):
+                    loss = criterion(input,t, output, target)  # here we have to change things for normal losses (delete input)
+                else:
+                    loss = criterion(output, target)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                train_loss += loss.item()
+
+                loop.set_description(f"Epoch [{epoch}/{num_epochs}]")
+                loop.set_postfix(trainloss=train_loss/(i+1))
+
+            avg_train_loss = train_loss / len(train_loader)
+            train_losses.append(avg_train_loss)
+
+            self.eval()
+
+            with torch.no_grad():
+                for ind, (input_tuple, target) in enumerate(val_loader):
+                    input_tuple = input_tuple
+                    input, t = input_tuple
+                    input = input.to(device)
+                    t = t.to(device)
+                    target = target.to(device)
+                    output = self(input.double(), t)
+                    if isinstance(self.loss_fn, CombinedLoss_dynamic):
+                        loss = criterion(input,t , output, target)
+                    else:
+                        loss = criterion(output, target)
+
+                    val_loss += loss.item()
+
+            avg_val_loss = val_loss / len(val_loader)
+            val_losses.append(avg_val_loss)
+
+            self.save_model(epoch, model_name, save_path)
+
+        self.save_loss_plot(model_name, num_epochs, train_losses, val_losses, save_path)
+        self.save_proc_time(model_name, tic, save_path)
+        self.save_losses_data(model_name, num_epochs, train_losses, val_losses, save_path)
+
 
 
 

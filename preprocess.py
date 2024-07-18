@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import torch
 # Create global normalization values:
 def norm_values(base_path):
     global_max = 0.
@@ -60,5 +61,9 @@ if __name__ == '__main__':
     #base_path = './data/laplace_convolution/'
     base_path = './data/testset/'
     #norm_values(base_path)
-    normalization(base_path)
+
+    #normalization(base_path)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'device = {device}')
 

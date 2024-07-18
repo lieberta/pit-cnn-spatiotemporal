@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchsummary import summary    # for summarizing the model
 import math
-from training_class import BaseModel
+from training_class import BaseModel, BaseModel_dynamic
 
 class EncoderBlock_cross(nn.Module):
     # one 3D convolutional block with batchnorm, relu activation and two convolution
@@ -186,7 +186,7 @@ class PICNN_VAR(BaseModel):
         x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
         return x, mu, logvar
 
-class PICNN_dynamic(BaseModel):
+class PECNN_dynamic(BaseModel_dynamic):
     # This is a Encoder-Decoder U-Net structured physics enhanced conv network with outputpadding for
     # boundary conditions in the data and cross connections between encoder blocks and decoder blocks
     # latent room in middle part enhanced with one layer of timestep
@@ -195,8 +195,8 @@ class PICNN_dynamic(BaseModel):
     # Middle: 3dconv / groupnorm / 3dconv / groupnorm
     # 3 Decoder Blocks with: tconv / groupnorm / tconv / groupnorm
     # groupnumber in group normalization increases with number of outputchannels
-    def __init__(self,c = 8, loss_fn):
-        super(PICNN_dynamic, self).__init__(loss_fn=loss_fn)
+    def __init__(self, loss_fn, c = 8,):
+        super(PECNN_dynamic, self).__init__(loss_fn=loss_fn)
 
         # conv<i><j> with i represents blocknumber and j represents the index inside of the block
         # one avgpool initilization for all blocks (no trainable parameter)
@@ -204,13 +204,13 @@ class PICNN_dynamic(BaseModel):
         # Encoderblock 1
         self.conv11 = nn.Conv3d(1, c, kernel_size=3, padding=1, padding_mode='reflect')
         self.gn11 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
-        self.conv12 = nn.Conv3d(out_c, out_c, kernel_size=3, padding=1, padding_mode='reflect')
+        self.conv12 = nn.Conv3d(c, c, kernel_size=3, padding=1, padding_mode='reflect')
         self.gn12 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
         self.avgpool = nn.AvgPool3d(kernel_size=2, stride=2)
 
         # Encoderblock 2
         self.conv21 = nn.Conv3d(c, c*2, kernel_size=3, padding=1, padding_mode='reflect')
-        self.gn21 = nn.GroupNorm(num_groups=int(c*2 / 8), num_channels=c*2)  # nn.BatchNorm3d(out_c)
+        self.gn21 = nn.GroupNorm(num_groups=int(c*2 / 8), num_channels=c*2)
         self.conv22 = nn.Conv3d(c*2, c*2, kernel_size=3, padding=1, padding_mode='reflect')
         self.gn22 = nn.GroupNorm(num_groups=int(c*2 / 8), num_channels=c*2)
         # avgpool in forward
@@ -223,10 +223,10 @@ class PICNN_dynamic(BaseModel):
         # avgpool in forward
 
         # Middle Block
-        self.conv1 = nn.Conv3d(c*4 + 1, c*8, kernel_size=3, padding=1, padding_mode='reflect')  # here +1 inputlayer filled with the current timestep
-        self.gn1 = nn.GroupNorm(num_groups=int(c), num_channels= c*8)                           # groups = int(c) because it would be c*8/8
-        self.conv2 = nn.Conv3d(c*8, c*8, kernel_size=3, padding=1, padding_mode='reflect')
-        self.gn2 = nn.GroupNorm(num_groups=int(c), num_channels=c*8)
+        self.conv_m1 = nn.Conv3d(c*4+1, c*8, kernel_size=3, padding=1, padding_mode='reflect')  # here +1 inputlayer filled with the current timestep
+        self.gn_m1 = nn.GroupNorm(num_groups=int(c), num_channels= c*8)                           # groups = int(c) because it would be c*8/8
+        self.conv_m2 = nn.Conv3d(c*8, c*8, kernel_size=3, padding=1, padding_mode='reflect')
+        self.gn_m2 = nn.GroupNorm(num_groups=int(c), num_channels=c*8)
 
         # Decoderblock 1
         self.up1 = nn.ConvTranspose3d(c*8, c*8, kernel_size= 2,stride=2, output_padding = 0)
@@ -252,8 +252,9 @@ class PICNN_dynamic(BaseModel):
         # Output
         self.conv_end = nn.Conv3d(c,1,kernel_size=1, padding =0, padding_mode='reflect')
 
-    def forward(self,x, timestep):
+    def forward(self,x_input, time):
 
+        x = x_input                                     # we need initial x_input for boundary conditions later
 
         # Encoder Block 1
         x = F.gelu(self.gn11(self.conv11(x)))           # gaussian linear unit (gelu) for non-linearity
@@ -271,28 +272,41 @@ class PICNN_dynamic(BaseModel):
         x = self.avgpool(x_cross3)
 
         # Middle forward:
-        x = F.gelu(self.gn2(self.conv2(F.gelu(self.gn1(self.conv1(x))))))
+        # create additional channel with values filled with time_value
+        batch, channels, x_dim, y_dim, z_dim = x.shape
+
+        # old method with error, because time is a tensor of size [batch,1] and not [1], delete if the
+        # time_channel = torch.full((batch, 1, x_dim, y_dim, z_dim), time.item(), device=x.device, dtype=x.dtype)
+
+        # Ensure time is reshaped to the correct shape
+        time = time.view(batch, 1, 1, 1, 1)
+        time_channel = time.expand(batch, 1, x_dim, y_dim, z_dim)
+
+        # concat time_channel
+        x = torch.cat((x, time_channel), dim=-4)
+        x = F.gelu(self.gn_m1(self.conv_m1(x)))
+        x = F.gelu(self.gn_m2(self.conv_m2(x)))
 
         # Decoder Block 1
-        x = self.up(x)
+        x = self.up1(x)
         x = torch.cat((x,x_cross3), dim = -4)
         x = F.gelu(self.gn41(self.conv41(x)))
         x = F.gelu(self.gn42(self.conv42(x)))
 
         # Decoder Block 2
-        x = self.up(x)
+        x = self.up2(x)
         x = torch.cat((x,x_cross2), dim = -4)
         x = F.gelu(self.gn51(self.conv51(x)))
         x = F.gelu(self.gn52(self.conv52(x)))
 
         # Decoder Block 3
-        x = self.up(x)
+        x = self.up3(x)
         x = torch.cat((x,x_cross1), dim = -4)
         x = F.gelu(self.gn61(self.conv61(x)))
         x = F.gelu(self.gn62(self.conv62(x)))
 
         # Output:
-        x= self.con_end(x)
+        x= self.conv_end(x)
 
         # Boundary Condition Padding:
             # impose dirichlet bc as a padding
@@ -308,18 +322,18 @@ class PICNN_dynamic(BaseModel):
         x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
         x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
 
-
-
+        return x
 
 
 if __name__ == '__main__':
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = PICNN_static(loss_fn = torch.nn.MSELoss()).to(device)
+    model = PECNN_dynamic(loss_fn = torch.nn.MSELoss()).to(device)
     #summary(model, (1, 1, 32, 64, 16))
     x = torch.arange(8*1*32*64*16).reshape(8, 1, 64, 32, 16).to(device)
-    y = model(x.float())
+    t = .1
+    y = model(x.float(),t)
     print(y.shape)
 
 

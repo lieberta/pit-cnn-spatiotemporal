@@ -5,6 +5,7 @@ import torch
 from training_class import CombinedLoss, CombinedLoss_dynamic
 import os
 
+print('test')
 def static():
     lr = 0.001 # 0.001 for CNN1D3D, 0.0001 for CNN1D
     batch = 32   # open for testing
@@ -31,7 +32,7 @@ def static():
             model.train_model(dataset = dataset, num_epochs= epochs,batch_size= batch,
                               learning_rate=lr,model_name=model_name,save_path=path)
 
-def dynamic(device, channels=16, lr=0.001,batch=32*8,epochs=50,a=1, path=f'./models/dynamic'):
+def dynamic(device, channels=16, lr=0.001,batch=32,epochs=50,a=1, path=f'./models/dynamic'):
     print('Create Combined loss')
     loss_fn = CombinedLoss_dynamic(a=a, device=device)
     # loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
@@ -54,5 +55,4 @@ if __name__ == '__main__':
     print(f'device = {device}')
     print('Okaaay - Let\'s go...')
 
-
-    dynamic(device, epochs=2)
+    dynamic(device)
