@@ -1,8 +1,8 @@
 import torch
 import re
 import os
-from dataset import HeatEquationMultiDataset
-from models import PICNN_static
+from dataset import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
+from models import PICNN_static, PECNN_dynamic
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,6 +10,7 @@ import json
 import pandas as pd
 import matplotlib.colors as mcolors
 from matplotlib.colors import LinearSegmentedColormap
+from training_class import CombinedLoss_dynamic
 
 # with  make_evaluation_table(...) makes a folder in ./plots/[Modell] and plots for each Testexperiment different
 # timestep deviations if the Model for corresponding timestep exists
@@ -101,22 +102,17 @@ def plot_heat_distribution(input_tensor, target, output, folder_path, predicted_
     plt.ylabel('Z')
     plt.savefig(os.path.join(folder_path, f'deviation_at_time_{predicted_time}.png'))
     plt.close()
-
-
-# Plots a comparison between target and output
-def plot_heat_distribution1(input_tensor, target, output, folder_path, predicted_time):
-    # Determine y_fire based on the input
+def plot_heat_distribution(input_tensor, target, output, folder_path, predicted_time):
+    # Assuming some previous code defines x_fire, y_fire
     x_fire, y_fire = find_fire(input_tensor)  # You need to implement this based on your specific logic
 
     # Calculate deviation
     deviation = torch.abs(target - output)
 
-    # Assuming target, output, and deviation are 4D tensors in the format [batch, x, y, z]
     # Plot Target
     plt.figure()
-    #print(f'target shape={target.shape}'\n f'fire found at y={y_fire}' \n print(f'target temperature at x_fire, y_fire,1={target[0,x_fire,y_fire,1].cpu()}')
-    plt.imshow(target[0,0, :, y_fire, :].cpu().numpy().T, cmap='hot', extent=(0, 64, 0, 16), origin='lower',
-               vmin=np.min(target.cpu().numpy()), vmax=500)
+    plt.imshow(target[0, 0, :, y_fire, :].cpu().numpy().T, cmap=cmap, extent=(0, 64, 0, 16), origin='lower',
+               vmin=-20, vmax=1000)
     plt.colorbar(label='Temperature (°C)')
     plt.title(f'Target at time {predicted_time}s')
     plt.xlabel('X')
@@ -126,8 +122,8 @@ def plot_heat_distribution1(input_tensor, target, output, folder_path, predicted
 
     # Plot Output
     plt.figure()
-    plt.imshow(output[0,0, :, y_fire, :].cpu().numpy().T, cmap='hot', extent=(0, 64, 0, 16), origin='lower',
-               vmin=np.min(output.cpu().numpy()), vmax=500)
+    plt.imshow(output[0, 0, :, y_fire, :].cpu().numpy().T, cmap=cmap, extent=(0, 64, 0, 16), origin='lower',
+               vmin=-20, vmax=1000)
     plt.colorbar(label='Temperature (°C)')
     plt.title(f'Output at time {predicted_time}s')
     plt.xlabel('X')
@@ -137,14 +133,16 @@ def plot_heat_distribution1(input_tensor, target, output, folder_path, predicted
 
     # Plot Deviation
     plt.figure()
-    plt.imshow(deviation[0,0, :, y_fire, :].cpu().numpy().T, cmap='hot', extent=(0, 64, 0, 16), origin='lower',
-               vmin=0, vmax=np.max(deviation.cpu().numpy()))  # Adjust vmax for deviation scale as needed
+    plt.imshow(deviation[0, 0, :, y_fire, :].cpu().numpy().T, cmap=cmap, extent=(0, 64, 0, 16), origin='lower',
+               vmin=0, vmax=np.max(deviation.cpu().numpy()))  # Keep the max deviation color mapping as it was
     plt.colorbar(label='Deviation (°C)')
     plt.title(f'Deviation at time {predicted_time}')
     plt.xlabel('X')
     plt.ylabel('Z')
     plt.savefig(os.path.join(folder_path, f'deviation_at_time_{predicted_time}.png'))
     plt.close()
+
+# Plots a comparison between target and output
 
 # makes a table that evaluates the mean deviation of a model for multiple experiments
 # uses function plot_heat_distribution to make plots of a room slice output / target / deviation for all test Experiments
@@ -248,7 +246,112 @@ def make_evaluation_table(a=1,lr=0.001,epochs=50,batch=32,channels=16):
     #csv_path = os.path.join(save_path, "model_evaluation_results.csv")
     #df_eval.to_csv(csv_path, index=False)
 
+def make_evaluation_table_dynamic(name_idx, a=1,lr=0.001,batch=256,channels=16):
+    # calculates for a dynamic model the temp. mean deviation for the testset for times 1 to 10 in seconds
+    # plots heat and error destributions
+
+    device = ("cuda" if torch.cuda.is_available() else "cpu")
+    base_dir = './models/dynamic'
+    eval_data = []
+
+    loss_fn = CombinedLoss_dynamic(a=a, device=device)
+    # loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
+    print(f'Combined Loss created \n Load Model')
+
+    # load model
+    model = PECNN_dynamic(loss_fn=loss_fn, c=channels).to(device)
+
+    # modelname list: pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
+    mn_list = [f'PECNN_dynamic_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PECNN_dynamic_batchnorm_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PECNN_dynamic_no_time_normalization_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}']
+
+    model_name= mn_list[name_idx]
+    dir = base_dir+'/'+model_name
+
+    model_pth = os.path.join(dir, f'{model_name}.pth')
+    model_state_dict = torch.load(model_pth, map_location=device) # load statedictionary
+    try:
+        model.load_state_dict(model_state_dict)
+        print(f'Model = {model_name} loaded')
+    except Exception as e:
+        print(f"Failed to load model from {model_pth}: {e}")
+
+
+
+    dataset = HeatEquationMultiDataset_dynamic(base_path=testset_path)
+    dataloader = DataLoader(dataset=dataset, shuffle=False, batch_size=1)
+
+
+    # Evaluate the model
+
+    eval_subdir = f'./plots/'+model_name
+    os.makedirs(eval_subdir, exist_ok=True) # generates a folder for one type of Architecture for multiple time steps
+    deviation_file_path = os.path.join(eval_subdir, 'deviations.txt')
+
+    with open(deviation_file_path, 'w') as deviation_file:
+        deviation_file.write("Mean Deviations:\n")
+
+        experiment_idx = 1 # set the exp index = 1
+        t_old = 999 # high value for start
+        for _, (input_tuple, target) in enumerate(dataloader):
+            input_tensor, t_tensor = input_tuple
+
+            # Transform tensor to the actual value (timesteps are from 0.1 to 10 measured in seconds, 100 per experiment)
+            t =t_tensor.item()
+            t = round(t, 1) # rounds t to the first decimal because some t had the form 9.10000000000001
+            print(f'We are looking at timestep: {t}')
+
+
+            # make a deviation list for every t that gets evaluated
+            deviation_time_dic = {}
+            if t %1 == 0:
+                if t not in deviation_time_dic:
+                    deviation_time_dic[t] = []
+
+                # change exp index each time the time value drops back to the inital value
+                if t<t_old:
+                    experiment_idx +=1
+
+                input_tensor = input_tensor.to(device)
+                target = target.to(device)
+                target_denorm = denormalize(target).to(device)
+                # predict the output:
+                model.eval()  # Set the model to evaluation mode
+                with torch.no_grad():
+                    output = model(input_tensor.float(), t_tensor.float())
+                # Assuming output and input_tensor are already on the appropriate device (CPU or GPU)
+                output_denorm = denormalize(output)
+                input_denorm = denormalize(input_tensor)
+
+
+                # calculate absolute mean deviation:
+                mean_deviation = torch.mean(torch.abs(target_denorm - output_denorm)).item()
+
+                deviation_time_dic[t].append(mean_deviation) # append the deviation for the exact time
+
+                # Collect evaluation data
+                eval_data.append({
+                    "Model": "PECNN",
+                    "Physics Loss Scalar": a,
+                    "Batch": batch,
+                    "Learning Rate": lr,
+                    "Experiment": f"Experimentindex {experiment_idx}",
+                    "Time and Mean Deviation": f'(time={t}, mean_deviation)'
+                })
+
+                deviation_str = f'Mean Deviation for {model_name}, Data {experiment_idx}, Time {t}: {mean_deviation}\n'
+                print(deviation_str.strip())
+
+                deviation_file.write(deviation_str)
+
+                heat_plot_folder = os.path.join(eval_subdir, f'experiment{experiment_idx}')
+                os.makedirs(heat_plot_folder, exist_ok=True)
+                plot_heat_distribution(input_denorm, target_denorm, output_denorm, heat_plot_folder, t)
+                t_old=t     # set to compare these
+
 def make_scalar_comparison(save_dir="./plots/meandeviationplots/",csv_path="./plots/model_evaluation_results.csv"):
+    # compares different loss scalars a for static models
 
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -296,6 +399,7 @@ def make_scalar_comparison(save_dir="./plots/meandeviationplots/",csv_path="./pl
 if __name__ == '__main__':
 
     testset_path = './data/testset/'
+    train_path ='./data/laplace_convolution/'
     with open(testset_path + 'normalization_values.json', 'r') as json_file:
         normalization_values = json.load(json_file)
         max_temp = normalization_values['max_temp']
@@ -305,8 +409,12 @@ if __name__ == '__main__':
     dist = max_temp - min
 
 
-    make_evaluation_table(a=1,lr=0.001,epochs=100,batch=32,channels=16)
+
+    #make_evaluation_table(a=1,lr=0.001,epochs=100,batch=32,channels=16)
     # make_scalar_comparison()
 
+
+    # pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
+    make_evaluation_table_dynamic(name_idx=0)
 
 

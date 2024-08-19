@@ -136,7 +136,7 @@ class CombinedLoss_dynamic(nn.Module):
         # return the weighted combination of mse and physics_loss
         return self.mse_loss(output, target) + self.a * p_loss
 
-# Loss function
+# Loss function for VAE in progress
 class Binarycross_physics(nn.Module):
     def __init__(self, a, predicted_time,device):
         super(Binarycross_physics).__init__()
@@ -174,8 +174,8 @@ class BaseModel(nn.Module):
         pin_memory = True
         num_workers = 1
 
-        train_set, val_set = torch.utils.data.random_split(dataset, [math.ceil(len(dataset) * 0.8),
-                                                                        math.floor(len(dataset) * 0.2)])
+        train_set, val_set = torch.utils.data.random_split(dataset, [math.ceil(len(dataset) * 0.08),
+                                                                        math.floor(len(dataset) * 0.02)]) # make set smaller since i have 10000 experiments
         train_loader = DataLoader(dataset=train_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers,
                                   pin_memory=pin_memory)
         val_loader = DataLoader(dataset=val_set, shuffle=shuffle, batch_size=batch_size,
@@ -243,6 +243,15 @@ class BaseModel(nn.Module):
             avg_val_loss = val_loss / len(val_loader)
             val_losses.append(avg_val_loss)
 
+
+            # Log the train and validation losses for this epoch
+            model_dir = os.path.join(save_path, model_name)
+            os.makedirs(model_dir, exist_ok=True)
+            losses_log_path = os.path.join(model_dir, f"{model_name}_losses.txt")
+            with open(losses_log_path, 'a') as log_file:
+                log_file.write(
+                    f"Epoch: {epoch + 1}, Train Loss: {avg_train_loss:.6f}, Validation Loss: {avg_val_loss:.6f}\n")
+
             # Save the model after each epoch
             self.save_model(epoch, model_name,save_path)
 
@@ -254,13 +263,43 @@ class BaseModel(nn.Module):
 
 
 
-    def save_model(self, epoch, model_name,save_path):
+    def save_model(self, epoch, model_name, save_path):
+        model_dir = os.path.join(save_path, model_name)
+        os.makedirs(model_dir, exist_ok=True)
+
+        # Base model path for checking existing epoch files
+        base_model_path = os.path.join(model_dir, f"epoch_{epoch}.pth")
+
+        # Check if the model file for the current epoch exists
+        if os.path.exists(base_model_path):
+            # Find the next available epoch number
+            i = 1  # Start counting from 1
+            new_model_path = os.path.join(model_dir, f"epoch_{epoch + i}.pth")
+            # Keep incrementing i until a new, non-existing model path is found
+            while os.path.exists(new_model_path):
+                i += 1
+                new_model_path = os.path.join(model_dir, f"epoch_{epoch + i}.pth")
+
+            # Update the model_path with the new epoch number
+            model_path = new_model_path
+        else:
+            # If the model file for the current epoch does not exist, use the base model path
+            model_path = base_model_path
+
+        # Save the model for the current/new epoch
+        torch.save(self.state_dict(), model_path)
+
+        # Always save/overwrite the .pth with its latest version
+        latest_model_path = os.path.join(model_dir, f"{model_name}.pth")
+        torch.save(self.state_dict(), latest_model_path)
+
+    '''def save_model(self, epoch, model_name,save_path):
         model_dir = os.path.join(save_path, model_name)
         os.makedirs(model_dir, exist_ok=True)
         model_path = os.path.join(model_dir, f"epoch_{epoch}.pth")
         torch.save(self.state_dict(), model_path)
         model_path = os.path.join(model_dir, f"{model_name}.pth")
-        torch.save(self.state_dict(), model_path) # save the endmodel to its name
+        torch.save(self.state_dict(), model_path)''' # save the endmodel to its name
 
     def save_loss_plot(self, model_name, num_epochs, train_losses, val_losses, save_path):
         # Create a list of epochs for the x-axis
@@ -319,6 +358,7 @@ class BaseModel(nn.Module):
             json.dump(losses_data, file)
 
 class BaseModel_dynamic(BaseModel):
+    # The BaseModel for the dynamic method, where each timestep is trained in one model
     def __init__(self, loss_fn):
         super(BaseModel_dynamic, self).__init__(loss_fn=loss_fn)
     def train_model(self, dataset, num_epochs, batch_size, learning_rate, model_name, save_path):
@@ -334,7 +374,7 @@ class BaseModel_dynamic(BaseModel):
 
         shuffle = True
         pin_memory = True
-        num_workers = 1
+        num_workers = 16
 
         train_set, val_set = torch.utils.data.random_split(dataset, [math.ceil(len(dataset) * 0.8),
                                                                     math.floor(len(dataset) * 0.2)])

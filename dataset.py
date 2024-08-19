@@ -82,6 +82,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
     def __init__(self, base_path='./data/laplace_convolution/'):
         # Create list of folders
         self.files = []
+        self.data_cache = {}            # new with cache
         folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if
                    os.path.isdir(os.path.join(base_path, f)) and f.startswith('experiment')]
 
@@ -100,7 +101,10 @@ class HeatEquationMultiDataset_dynamic(Dataset):
 
     def __getitem__(self, idx):
         npz_file_path, predicted_time, num_timesteps = self.files[idx]
-        data = np.load(npz_file_path)['temperature']
+        if npz_file_path not in self.data_cache:                                        # new with cache
+            self.data_cache.clear()                                                     # new with cache clears the cache dictionary to not overload the memory
+            self.data_cache[npz_file_path] = np.load(npz_file_path)['temperature']      # new with cache
+        data = self.data_cache[npz_file_path] # new with cache, old: data = np.load(npz_file_path)['temperature']
         input_tensor = torch.tensor(data[0, :, :, :], dtype=torch.float64).unsqueeze(0)
         target_tensor = torch.tensor(data[predicted_time, :, :, :], dtype=torch.float64).unsqueeze(0)
         predicted_time_tensor = torch.tensor([predicted_time * 0.1], dtype=torch.float64)  # Convert predicted time to tensor
