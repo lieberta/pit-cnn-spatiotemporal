@@ -197,7 +197,7 @@ class PECNN_dynamic_timefirst(BaseModel_dynamic):
     # 3 Decoder Blocks with: tconv / groupnorm / tconv / groupnorm
     # groupnumber in group normalization increases with number of outputchannels
     def __init__(self, c = 8):
-        super(PECNN_dynamic_timefirst, self).__init__(loss_fn=loss_fn)
+        super(PECNN_dynamic_timefirst, self).__init__()
 
 
         self.c = c
@@ -320,7 +320,7 @@ class PECNN_dynamic_timefirst(BaseModel_dynamic):
         x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
 
         # Set the left and right slices
-        x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
+        x[:, :, :, :, 0] = x_input[0,0,-1,-1,-1] # hardset this to one (top-right-back-) corner point of x_input that has the value 20.0 (before normalization) because x_input has high values at the fireplaces for z = 0
         x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
 
         return x

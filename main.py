@@ -75,9 +75,9 @@ if __name__ == '__main__':
     autodiff=False # for later autodiff
 
     # dataloader uses only 1/10 of the actual data!!!!!!!!!! -> small dataset
-    name = f'PECNN_dynamic_smalltest'
-    model = PECNN_dynamic(c=channels).to(device)
+    name = f'PECNN_TIMEFIRST.V1.1_dynamic_smalltest'
+    model = PECNN_dynamic_timefirst(c=channels).to(device)
     path = f'./models/dynamic'
 
-
-    dynamic()
+    for a in [1,0]:
+        dynamic()
