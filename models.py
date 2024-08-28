@@ -451,17 +451,17 @@ class PECNN_dynamic(BaseModel_dynamic):
         x= self.conv_end(x)
 
         # Boundary Condition Padding:
-            # impose dirichlet bc as a padding
-            # Set the front and back slices
+        # impose dirichlet bc as a padding
+        # Set the left and right slices
         x[:, :, 0, :, :] = x_input[:, :, 0, :, :]
         x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
 
-        # Set the top and bottom slices
+        # Set the front and back slices
         x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
         x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
 
-        # Set the left and right slices
-        x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
+        # Set the bottom and top slices
+        x[:, :, :, :, 0] = x_input[0,0,-1,-1,-1] # hardset this to one (top-right-back-) corner point of x_input that has the value 20.0 (before normalization) because x_input has high values at the fireplaces for z = 0
         x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
 
         return x
