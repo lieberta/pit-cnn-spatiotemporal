@@ -79,7 +79,7 @@ class HeatEquationMultiDataset_dynamic_memoryintensive(Dataset):
         return (input_tensor, predicted_time), target_tensor
 
 class HeatEquationMultiDataset_dynamic(Dataset):
-    def __init__(self, base_path='./data/laplace_convolution/'):
+    def __init__(self, modulo=10, base_path='./data/laplace_convolution/'):
         # Create list of folders
         self.files = []
         self.data_cache = {}            # new with cache
@@ -88,7 +88,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         i=0 # count variable
         # Collect file paths and time steps
         for folder in folders:
-            if i%10==0: # take only every tenth folder
+            if i%modulo==0: # take only every tenth folder
                 npz_file_path = os.path.join(folder, 'normalized_heat_equation_solution.npz')
                 if os.path.exists(npz_file_path):
                     data = np.load(npz_file_path)['temperature']

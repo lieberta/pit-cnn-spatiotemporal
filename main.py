@@ -71,7 +71,7 @@ if __name__ == '__main__':
     lr = 0.001
     batch = 32 * 8
     epochs = 10
-    a = .5
+    a = 1
     autodiff=False # for later autodiff
 
     # dataloader uses only 1/10 of the actual data!!!!!!!!!! -> small dataset
