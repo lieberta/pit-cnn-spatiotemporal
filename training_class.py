@@ -134,7 +134,10 @@ class CombinedLoss_dynamic(nn.Module):
 
         # return the weighted combination of mse and physics_loss
         return self.mse_loss(output, target) + self.a * p_loss
-class CombinedLoss_autodiff(nn.Module):
+
+'''autodiff is work in progress. Problems: the derivatives won't match if the time derivative is calculated precicesly with autodiff while the spatial derivative is caluclated numerically (difference quotient)
+ another problem'''
+'''class CombinedLoss_autodiff(nn.Module):
     # physics enhanced loss for the dynamic method pecnn_dynamic
     def __init__(self, a, device, alpha = 0.0257, source_intensity=100000.0):
         super(CombinedLoss_autodiff, self).__init__()
@@ -188,7 +191,7 @@ class CombinedLoss_autodiff(nn.Module):
 
         # return the weighted combination of mse and physics_loss
         return self.mse_loss(output, target) + self.a * p_loss
-
+'''
 
 
 class BaseModel(nn.Module):

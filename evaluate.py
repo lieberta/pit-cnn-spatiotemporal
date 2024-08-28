@@ -246,7 +246,7 @@ def make_evaluation_table(a=1,lr=0.001,epochs=50,batch=32,channels=16):
     #csv_path = os.path.join(save_path, "model_evaluation_results.csv")
     #df_eval.to_csv(csv_path, index=False)
 
-def make_evaluation_table_dynamic(model_name,model, a=1,lr=0.001,batch=256,channels=16):
+def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,channels=16):
     # calculates for a dynamic model the temp. mean deviation for the testset for times 1 to 10 in seconds
     # plots heat and error destributions
 
@@ -258,10 +258,9 @@ def make_evaluation_table_dynamic(model_name,model, a=1,lr=0.001,batch=256,chann
     # loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
     print(f'Combined Loss created \n Load Model')
 
-    # load model
-    model = PECNN_dynamic(c=channels).to(device)
 
     dir = base_dir+'/'+model_name
+
 
     model_pth = os.path.join(dir, f'{model_name}.pth')
     model_state_dict = torch.load(model_pth, map_location=device) # load statedictionary
