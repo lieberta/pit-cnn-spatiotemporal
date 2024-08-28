@@ -85,16 +85,18 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self.data_cache = {}            # new with cache
         folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if
                    os.path.isdir(os.path.join(base_path, f)) and f.startswith('experiment')]
-
+        i=0 # count variable
         # Collect file paths and time steps
         for folder in folders:
-            npz_file_path = os.path.join(folder, 'normalized_heat_equation_solution.npz')
-            if os.path.exists(npz_file_path):
-                data = np.load(npz_file_path)['temperature']
-                num_timesteps = data.shape[0]
+            if i%10==0: # take only every tenth folder
+                npz_file_path = os.path.join(folder, 'normalized_heat_equation_solution.npz')
+                if os.path.exists(npz_file_path):
+                    data = np.load(npz_file_path)['temperature']
+                    num_timesteps = data.shape[0]
 
-                for predicted_time in range(1, num_timesteps):  # assuming data has time steps as the first dimension
-                    self.files.append((npz_file_path, predicted_time, num_timesteps))
+                    for predicted_time in range(1, num_timesteps):  # assuming data has time steps as the first dimension
+                        self.files.append((npz_file_path, predicted_time, num_timesteps))
+            i += 1  # count up the variable
 
     def __len__(self):
         return len(self.files)
@@ -116,12 +118,13 @@ if __name__ == '__main__':
     dataset = HeatEquationMultiDataset_dynamic(base_path=f'data/testset')
 
     for x,y in dataset:
-        print(f'{x[0].shape} \n {x[1]} \n {y.shape}')
+        print(f'{x[0].shape} \n {x[1].shape} \n {y.shape}')
         break
 
     # Now, to get the shape of the inputs and targets, you can do:
-    input_shape = dataset.inputs.shape
-    target_shape = dataset.targets.shape
+    #input_shape = dataset.inputs.shape
+    #target_shape = dataset.targets.shape
 
-    print("Inputs shape:", input_shape)
-    print("Targets shape:", target_shape)
+    print("Inputs shape:", len(dataset))
+
+    #print("Targets shape:", target_shape)

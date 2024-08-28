@@ -4,6 +4,7 @@ from dataset import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
 import torch
 from training_class import CombinedLoss, CombinedLoss_dynamic
 import os
+from torchsummary import summary
 
 def static():
     lr = 0.001 # 0.001 for CNN1D3D, 0.0001 for CNN1D
@@ -37,7 +38,7 @@ def dynamic():
     print('Create Combined loss')
     loss_fn = CombinedLoss_dynamic(a=a, device=device)
 
-    model_name = name+f'_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}'
+    model_name = name+f'_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}_autodiff={autodiff}'
     model_dir = path+'/'+ model_name            # path to the model_dictionary
     model_pth = model_dir+'/'+model_name+'.pth' # path to the pth file
 
@@ -56,8 +57,8 @@ def dynamic():
     # this is for version 2 'training_class':
     dataset = HeatEquationMultiDataset_dynamic()
     print(f'Train Model:')
-    model.train_model(dataset=dataset, num_epochs=epochs, batch_size=batch,
-                      learning_rate=lr, model_name=model_name, save_path=path)
+    model.train_model(a=a, dataset=dataset, num_epochs=epochs, batch_size=batch,
+                      learning_rate=lr, model_name=model_name, save_path=path, autodiff=autodiff)
 
 
 if __name__ == '__main__':
@@ -70,12 +71,13 @@ if __name__ == '__main__':
     lr = 0.001
     batch = 32 * 8
     epochs = 10
-    a = 0
-    loss_fn = CombinedLoss_dynamic(a=a, device=device)
+    a = .5
+    autodiff=False # for later autodiff
 
     # dataloader uses only 1/10 of the actual data!!!!!!!!!! -> small dataset
-    name = f'PECNN_dynamic_smalldataset_no_time_normalization_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}'
-    model = PECNN_dynamic(loss_fn=loss_fn, c=channels).to(device)
+    name = f'PECNN_dynamic_smalltest'
+    model = PECNN_dynamic(c=channels).to(device)
     path = f'./models/dynamic'
+
 
     dynamic()

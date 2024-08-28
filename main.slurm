@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=PECNN_small_a=0		  # create a short name for your job
+#SBATCH --job-name=PECNN_smalldata_a=.5		  # create a short name for your job
 
 #SBATCH --nodes=1                       # node count
 #SBATCH --ntasks=1                      # total number of tasks across all nodes

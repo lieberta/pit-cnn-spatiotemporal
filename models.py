@@ -196,7 +196,7 @@ class PECNN_dynamic_timefirst(BaseModel_dynamic):
     # Middle: 3dconv / groupnorm / 3dconv / groupnorm
     # 3 Decoder Blocks with: tconv / groupnorm / tconv / groupnorm
     # groupnumber in group normalization increases with number of outputchannels
-    def __init__(self, loss_fn,c = 8):
+    def __init__(self, c = 8):
         super(PECNN_dynamic_timefirst, self).__init__(loss_fn=loss_fn)
 
 
@@ -333,8 +333,8 @@ class PECNN_dynamic(BaseModel_dynamic):
     # Middle: 3dconv / groupnorm / 3dconv / groupnorm
     # 3 Decoder Blocks with: tconv / groupnorm / tconv / groupnorm
     # groupnumber in group normalization increases with number of outputchannels
-    def __init__(self, loss_fn, c = 8):
-        super(PECNN_dynamic, self).__init__(loss_fn=loss_fn)
+    def __init__(self, c = 8):
+        super(PECNN_dynamic, self).__init__()
 
 
         self.c = c

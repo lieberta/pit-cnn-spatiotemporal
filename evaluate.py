@@ -246,11 +246,11 @@ def make_evaluation_table(a=1,lr=0.001,epochs=50,batch=32,channels=16):
     #csv_path = os.path.join(save_path, "model_evaluation_results.csv")
     #df_eval.to_csv(csv_path, index=False)
 
-def make_evaluation_table_dynamic(name_idx, a=1,lr=0.001,batch=256,channels=16):
+def make_evaluation_table_dynamic(model_name,model, a=1,lr=0.001,batch=256,channels=16):
     # calculates for a dynamic model the temp. mean deviation for the testset for times 1 to 10 in seconds
     # plots heat and error destributions
 
-    device = ("cuda" if torch.cuda.is_available() else "cpu")
+
     base_dir = './models/dynamic'
     eval_data = []
 
@@ -261,12 +261,6 @@ def make_evaluation_table_dynamic(name_idx, a=1,lr=0.001,batch=256,channels=16):
     # load model
     model = PECNN_dynamic(loss_fn=loss_fn, c=channels).to(device)
 
-    # modelname list: pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
-    mn_list = [f'PECNN_dynamic_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
-               f'PECNN_dynamic_batchnorm_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
-               f'PECNN_dynamic_no_time_normalization_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}']
-
-    model_name= mn_list[name_idx]
     dir = base_dir+'/'+model_name
 
     model_pth = os.path.join(dir, f'{model_name}.pth')
@@ -397,6 +391,7 @@ def make_scalar_comparison(save_dir="./plots/meandeviationplots/",csv_path="./pl
 
 
 if __name__ == '__main__':
+    device = ("cuda" if torch.cuda.is_available() else "cpu")
 
     testset_path = './data/testset/'
     train_path ='./data/laplace_convolution/'
@@ -414,7 +409,24 @@ if __name__ == '__main__':
     # make_scalar_comparison()
 
 
+
+    channels = 16
+    lr = 0.001
+    batch = 32 * 8
+    epochs = 10
+    a = 1
+    loss_fn = CombinedLoss_dynamic(a=a, device=device)
+
+
+    # modelname list: pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
+    mn_list = [f'PECNN_dynamic_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PECNN_dynamic_batchnorm_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PECNN_dynamic_no_time_normalization_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}']
+
+    # dataloader uses only 1/10 of the actual data!!!!!!!!!! -> small dataset
+    name = f'PECNN_dynamic_smalldataset_latenttimeforrealthistime_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}'
+    model = PECNN_dynamic(loss_fn=loss_fn, c=channels).to(device)
     # pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
-    make_evaluation_table_dynamic(name_idx=0)
+    make_evaluation_table_dynamic(name, model, a,lr,batch,channels)
 
 
