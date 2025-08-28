@@ -1,68 +1,42 @@
 # PIT-CNN
-This module generates synthetic temperature fields for a 3D room using a finite-difference explicit scheme. It supports multiple rectangular heat sources (“fireplaces”), saves time-sampled temperature tensors, and writes metadata for each experiment. The data can be used to train spatiotemporal surrogate models (e.g., PIT-CNN).
 
-Features
+Surrogate modeling of transient 3D heat transfer using convolutional neural networks with physics-informed loss functions.
+This repo contains tools to simulate heat transfer, preprocess data, train neural networks, and evaluate models.
 
-3D Laplacian via conv3d (learnable-free kernel) for fast CPU/GPU execution
+## Setup
+git clone <this-repo>
+cd <this-repo>
+pip install -r requirements.txt
 
-Explicit time stepping with constant source term
 
-Randomized rectangular heat sources on the floor plane
+# Workflow
 
-Hard Dirichlet boundary at 20 °C on all faces
+# 1. Generate simulation data
+Runs a 3D transient heat equation with random rectangular heat sources (“fireplaces”).
 
-NPZ output (temperature, time, x, y, z) + a human-readable info file
-
-Batch generation over multiple fire counts
-
-Requirements
-
-Python 3.9+
-
-PyTorch
-
-NumPy
-
-pip install torch numpy
-
-File Overview
-
-heat_sim_class.py
-
-Laplacian3D: fixed 3×3×3 kernel module implementing the 3D Laplacian.
-
-HeatSimulation: sets up the grid, sources, IC/BC, integrates in time, and saves results.
-
-run_experiment: convenience wrapper to run a single experiment.
-
-__main__: example loop that generates experiments for fire counts [3,4,5,6,7,8,9].
-
-Quickstart
-1) Run the demo (uses GPU if available)
+```bash
 python heat_sim_class.py
+```
+Saves results in ./data/testset/experiment_* with:
+heat_equation_solution.npz → temperatures, grid, time
+fireplace_simulation_results.txt → metadata
+
+# 2. Preprocess experiments
+
+Normalize temperature fields across all experiments.
+```bash
+python preprocess.py
+```
+Computes global min/max
+Saves normalized .npz files in each experiment folder
 
 
-This will create dated experiment folders under:
+Trained checkpoints saved in ./models/
 
-./data/testset/experiment_<num_fires>_<YYYYMMDD_HHMMSS>/
-├── heat_equation_solution.npz
-└── fireplace_simulation_results.txt
-
-2) Use from Python
-import torch
-from heat_sim_class import HeatSimulation
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-sim = HeatSimulation(
-    num_fires=5,       # number of rectangular sources
-    alpha=0.0257,      # thermal diffusivity [m^2/s]
-    Lx=6.3, Ly=3.1, Lz=1.5,   # domain size [m]
-    Nx=64, Ny=32, Nz=16,      # grid points
-    T=10.0, Nt=10000,         # total time [s], steps
-    device=device
-)
-
-sim.run_simulation()
-sim.save_results()
-
+# 3. Train models
+Run static or dynamic CNNs with physics-informed loss.
+```bash
+python main.py
+```
+Static models → PICNN_static
+Dynamic models → PECNN_dynamic
