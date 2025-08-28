@@ -4,10 +4,11 @@ Surrogate modeling of transient 3D heat transfer using convolutional neural netw
 This repo contains tools to simulate heat transfer, preprocess data, train neural networks, and evaluate models.
 
 ## Setup
+```bash
 git clone <this-repo>
 cd <this-repo>
 pip install -r requirements.txt
-
+```
 
 # Workflow
 
@@ -39,4 +40,5 @@ Run static or dynamic CNNs with physics-informed loss.
 python main.py
 ```
 Static models → PICNN_static
+
 Dynamic models → PECNN_dynamic
