@@ -1,5 +1,4 @@
-# Geospatial Time Series
-
+# PIT-CNN
 Here we try to forecast temperature development in a simulated room via CNNs. Data used to train the model are simulated 
 temperature grid meshes of burning rooms.
 
