@@ -3,13 +3,6 @@
 Surrogate modeling of transient 3D heat transfer using convolutional neural networks with physics-informed loss functions.
 This repo contains tools to simulate heat transfer, preprocess data, train neural networks, and evaluate models.
 
-## Setup
-```bash
-git clone <this-repo>
-cd <this-repo>
-pip install -r requirements.txt
-```
-
 # Workflow
 
 
