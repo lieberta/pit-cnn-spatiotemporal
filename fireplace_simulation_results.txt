@@ -1,0 +1,8 @@
+Fireplace 1: Location: x=6, y=10, Dimensions: width=2, depth=1
+Fireplace 2: Location: x=30, y=6, Dimensions: width=2, depth=1
+Fireplace 3: Location: x=19, y=19, Dimensions: width=1, depth=4
+
+Simulated Time =3.0s, dt =0.001s, amount of simulated timesteps =3000, Alpha =0.0257
+Lx=6.3, Ly=3.1, Lz=1.5, Nx=64, Ny=32, Nz=16
+min Temperature=20.0, max Temperature=12559.110257536771
+Processing time=153.08013019999999s
