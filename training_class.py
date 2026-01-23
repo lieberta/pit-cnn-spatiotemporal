@@ -75,8 +75,11 @@ class HeatEquationLoss(nn.Module):
         # Compute the heat equation loss
         loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
         return loss
+<<<<<<< HEAD
 
 # Physics Loss and MSE for static model
+=======
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 class CombinedLoss(nn.Module):
     def __init__(self, a, predicted_time, device):
         super(CombinedLoss, self).__init__()
@@ -87,7 +90,10 @@ class CombinedLoss(nn.Module):
     def forward(self, current_input, output, target):
         return self.mse_loss(output, target) + self.a*self.physics_loss(current_input, output)
 
+<<<<<<< HEAD
 # Physics Loss and MSE for dynamic model with preciser time derivative
+=======
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 
 class CombinedLoss_dynamic(nn.Module):
     # physics enhanced loss for the dynamic method pecnn_dynamic
@@ -104,11 +110,18 @@ class CombinedLoss_dynamic(nn.Module):
             #device)  # Assuming this is a custom class you've defined
         self.a = a
 
+<<<<<<< HEAD
     def temporal_derivative(self, output, output_past, t, t_past):
         # expand the tensor with the time value (for a whole batch) to match output dimensions
         t = t.view(t.size(0), t.size(1), 1, 1, 1).expand_as(output)
         t_past = t_past.view(t_past.size(0),t.size(1),1,1,1).expand_as(output_past)
         return (output - output_past) / (t-t_past)
+=======
+    def temporal_derivative(self, input, t, output):
+        # expand the tensor with the time value (for a whole batch) to match output dimensions
+        t = t.view(t.size(0), t.size(1), 1, 1, 1).expand_as(output)
+        return (output - input) / t
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 
     def create_source_term(self, input_tensor):
         # Create a mask of where input_tensor is greater than 1000
@@ -122,6 +135,7 @@ class CombinedLoss_dynamic(nn.Module):
 
         return source_term
 
+<<<<<<< HEAD
     def forward(self, input, output, output_past, t, t_past, target):
 
         if self.a != 0:
@@ -154,6 +168,32 @@ class CombinedLoss_autodiff(nn.Module):
         super(CombinedLoss_autodiff, self).__init__()
         self.alpha = alpha
         self.model=model
+=======
+    def forward(self, input, t, output, target):
+
+        # Calculate the temporal derivative
+        temporal_derivative = self.temporal_derivative(input, t, output)
+
+        # Calculate the Laplacian
+        laplacian = self.laplacian_layer(input)
+
+        # Create the source term
+        source_term = self.create_source_term(input)
+
+        # Compute the heat equation loss
+        p_loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
+
+        # return the weighted combination of mse and physics_loss
+        return self.mse_loss(output, target) + self.a * p_loss
+
+'''autodiff is work in progress. Problems: the derivatives won't match if the time derivative is calculated precicesly with autodiff while the spatial derivative is caluclated numerically (difference quotient)
+ another problem'''
+'''class CombinedLoss_autodiff(nn.Module):
+    # physics enhanced loss for the dynamic method pecnn_dynamic
+    def __init__(self, a, device, alpha = 0.0257, source_intensity=100000.0):
+        super(CombinedLoss_autodiff, self).__init__()
+        self.alpha = alpha
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
         self.laplacian_layer = Laplacian3DLayer(device)
         self.source_intensity = source_intensity
 
@@ -164,6 +204,7 @@ class CombinedLoss_autodiff(nn.Module):
             #device)  # Assuming this is a custom class you've defined
         self.a = a
 
+<<<<<<< HEAD
     def temporal_derivative(self, input, t):
 
         t = t.clone().detach().requires_grad_(True)
@@ -181,6 +222,18 @@ class CombinedLoss_autodiff(nn.Module):
         print(f'time_derivatives shape: {time_derivatives.shape}')
 
         return time_derivatives, output
+=======
+    def temporal_derivative(self, t, output):
+        # Compute the derivative of each output element with respect to t
+        # Here, we're treating the entire output tensor as the "outputs" in autograd.grad
+        # Keep the outputs as the entire tensor and compute the gradient w.r.t. t for each element
+        t_expanded = t.view(-1, 1, 1, 1, 1).expand_as(output)
+        time_derivatives = torch.autograd.grad(outputs=output, inputs=t_expanded,
+                                               grad_outputs=torch.ones_like(output), # generates a 3d grid of trainable derivatives
+                                               create_graph=True)[0]
+        print(f'time_derivatives shape {time_derivatives.shape}')
+        return time_derivatives
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 
     def create_source_term(self, input_tensor):
         # Create a mask of where input_tensor is greater than 1000
@@ -194,6 +247,7 @@ class CombinedLoss_autodiff(nn.Module):
 
         return source_term
 
+<<<<<<< HEAD
     def forward(self, input, t, target):
         if self.a != 0:
             # Calculate the temporal derivative
@@ -222,6 +276,27 @@ class CombinedLoss_autodiff(nn.Module):
             return self.mse_loss(output, target)
 
 # Basemodel for static models in model.py
+=======
+    def forward(self, input, t, output, target):
+
+        # Calculate the temporal derivative
+        temporal_derivative = self.temporal_derivative(t, output)
+
+        # Calculate the Laplacian
+        laplacian = self.laplacian_layer(input)
+
+        # Create the source term
+        source_term = self.create_source_term(input)
+
+        # Compute the heat equation loss
+        p_loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
+
+        # return the weighted combination of mse and physics_loss
+        return self.mse_loss(output, target) + self.a * p_loss
+'''
+
+
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 class BaseModel(nn.Module):
     def __init__(self, loss_fn):
         super(BaseModel, self).__init__()
@@ -429,7 +504,10 @@ class BaseModel(nn.Module):
         with open(filename, 'w') as file:
             json.dump(losses_data, file)
 
+<<<<<<< HEAD
 # Baseclass for dynamic models in model.py
+=======
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 class BaseModel_dynamic(nn.Module):
     # The BaseModel for the dynamic method, where each timestep is trained in one model
     def __init__(self):
@@ -457,10 +535,17 @@ class BaseModel_dynamic(nn.Module):
                                 num_workers=num_workers, pin_memory=pin_memory)
 
 
+<<<<<<< HEAD
         if autodiff:
             criterion = CombinedLoss_autodiff(a=a,device=device, model=self).to(device) # pass model=self to the loss because the loss needs the model to generate derivatives to t
         else:
             criterion = CombinedLoss_dynamic(a=a, device=device).to(device)
+=======
+        if autodiff == False:
+            criterion = CombinedLoss_dynamic(a=a,device=device).to(device)
+        elif autodiff == True:
+            criterion = CombinedLoss_autodiff(a=a,device=device).to(device)
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
@@ -477,6 +562,7 @@ class BaseModel_dynamic(nn.Module):
                 input = input.to(device)
                 t = t.to(device)
 
+<<<<<<< HEAD
                 target = target.to(device)
 
                 # if autodiff == True make some adjustments
@@ -488,6 +574,16 @@ class BaseModel_dynamic(nn.Module):
                     output = self(input.double(), t)
                     output_past = self(input.double(), t_past)  # Predict the earlier point
                     loss = criterion(input, output, output_past, t, t_past, target)  # Adjust for normal losses
+=======
+                # Set requires_grad=True for time tensor
+                if autodiff==True:
+                    t.requires_grad_()  # Enables gradient tracking for t, for autodiff purposes
+
+                target = target.to(device)
+                output = self(input.double(), t)
+
+                loss = criterion(input,t, output, target)  # here we have to change things for normal losses (delete input)
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -509,6 +605,7 @@ class BaseModel_dynamic(nn.Module):
                     input = input.to(device)
                     t = t.to(device)
                     target = target.to(device)
+<<<<<<< HEAD
 
                     if autodiff:
                         t = t.view(t.size(0), t.size(1), 1, 1, 1).expand_as(input)
@@ -519,6 +616,11 @@ class BaseModel_dynamic(nn.Module):
                         output_past = self(input.double(), t_past)  # Predict the earlier point
                         loss = criterion(input, output, output_past, t, t_past, target)  # Adjust for normal losses
 
+=======
+                    output = self(input.double(), t)
+
+                    loss = criterion(input,t,output,target)
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 
                     val_loss += loss.item()
 

@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="Black">
+<<<<<<< HEAD
     <option name="sdkName" value="Python 3.8" />
   </component>
   <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.8" project-jdk-type="Python SDK" />
+=======
+    <option name="sdkName" value="C:\ProgramData\anaconda3" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="Remote Python 3.8.18 (sftp://lieberta@hsuper-login01.hsu-hh.de:22/home/l/lieberta/venv/penn-venv/bin/python)" project-jdk-type="Python SDK" />
+>>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
 </project>
