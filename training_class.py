@@ -12,6 +12,19 @@ import json
 import torch.profiler
 import csv
 
+
+def load_checkpoint(model, optimizer, checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_epoch = checkpoint.get("epoch", -1) + 1
+        return start_epoch
+
+    model.load_state_dict(checkpoint)
+    return 0
+
 #   function to append a row to a CSV file, creating the file with header if it doesn't exist
 def append_metrics_row(csv_path, header, row):
     file_exists = os.path.exists(csv_path)
@@ -154,7 +167,7 @@ class BaseModel(nn.Module):
         self.loss_fn = loss_fn
 
     def train_model(self, dataset, num_epochs, batch_size, learning_rate, model_name, save_path,
-                    run_id=None, a=None, channels=None, seed=None):
+                    run_id=None, a=None, channels=None, seed=None, resume_checkpoint_path=None):
         # save time:
         tic = time.perf_counter()  # Start time
 
@@ -185,8 +198,12 @@ class BaseModel(nn.Module):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
+        start_epoch = 0
+        if resume_checkpoint_path:
+            start_epoch = load_checkpoint(self, optimizer, resume_checkpoint_path, device)
+            print(f"Resuming from checkpoint: {resume_checkpoint_path} (start_epoch={start_epoch})")
 
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             train_loss = 0.0
             val_loss = 0.0
 
@@ -262,7 +279,7 @@ class BaseModel(nn.Module):
             append_metrics_row(metrics_path, header, row)
 
             # Save the model after each epoch
-            self.save_model(epoch, model_name,save_path)
+            self.save_model(epoch, model_name, save_path, optimizer)
 
 
 
@@ -272,7 +289,7 @@ class BaseModel(nn.Module):
 
 
 
-    def save_model(self, epoch, model_name, save_path):
+    def save_model(self, epoch, model_name, save_path, optimizer):
         model_dir = os.path.join(save_path, model_name)
         os.makedirs(model_dir, exist_ok=True)
 
@@ -295,12 +312,16 @@ class BaseModel(nn.Module):
             # If the model file for the current epoch does not exist, use the base model path
             model_path = base_model_path
 
-        # Save the model for the current/new epoch
-        torch.save(self.state_dict(), model_path)
+        checkpoint = {
+            "epoch": epoch,
+            "model_state_dict": self.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        }
+        torch.save(checkpoint, model_path)
 
         # Always save/overwrite the .pth with its latest version
         latest_model_path = os.path.join(model_dir, f"{model_name}.pth")
-        torch.save(self.state_dict(), latest_model_path)
+        torch.save(checkpoint, latest_model_path)
 
     '''def save_model(self, epoch, model_name,save_path):
         model_dir = os.path.join(save_path, model_name)
@@ -371,7 +392,7 @@ class BaseModel_dynamic(nn.Module):
     def __init__(self):
         super(BaseModel_dynamic, self).__init__()
     def train_model(self, a, dataset, num_epochs, batch_size, learning_rate, model_name, save_path,
-                    run_id=None, channels=None, seed=None):
+                    run_id=None, channels=None, seed=None, resume_checkpoint_path=None):
         tic = time.perf_counter()  # Start time
 
         device = ("cuda" if torch.cuda.is_available() else "cpu")
@@ -398,7 +419,12 @@ class BaseModel_dynamic(nn.Module):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
-        for epoch in range(num_epochs):
+        start_epoch = 0
+        if resume_checkpoint_path:
+            start_epoch = load_checkpoint(self, optimizer, resume_checkpoint_path, device)
+            print(f"Resuming from checkpoint: {resume_checkpoint_path} (start_epoch={start_epoch})")
+
+        for epoch in range(start_epoch, num_epochs):
             train_loss = 0.0
             val_loss = 0.0
 
@@ -462,7 +488,7 @@ class BaseModel_dynamic(nn.Module):
             }
             append_metrics_row(metrics_path, header, row)
 
-            self.save_model(epoch, model_name, save_path)
+            self.save_model(epoch, model_name, save_path, optimizer)
 
         self.save_loss_plot(model_name, num_epochs, train_losses, val_losses, save_path)
         self.save_proc_time(model_name, tic, save_path)
@@ -470,7 +496,7 @@ class BaseModel_dynamic(nn.Module):
 
 
 
-    def save_model(self, epoch, model_name, save_path):
+    def save_model(self, epoch, model_name, save_path, optimizer):
         model_dir = os.path.join(save_path, model_name)
         os.makedirs(model_dir, exist_ok=True)
 
@@ -493,12 +519,16 @@ class BaseModel_dynamic(nn.Module):
             # If the model file for the current epoch does not exist, use the base model path
             model_path = base_model_path
 
-        # Save the model for the current/new epoch
-        torch.save(self.state_dict(), model_path)
+        checkpoint = {
+            "epoch": epoch,
+            "model_state_dict": self.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        }
+        torch.save(checkpoint, model_path)
 
         # Always save/overwrite the .pth with its latest version
         latest_model_path = os.path.join(model_dir, f"{model_name}.pth")
-        torch.save(self.state_dict(), latest_model_path)
+        torch.save(checkpoint, latest_model_path)
 
     '''def save_model(self, epoch, model_name,save_path):
         model_dir = os.path.join(save_path, model_name)

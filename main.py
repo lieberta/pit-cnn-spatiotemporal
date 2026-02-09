@@ -25,6 +25,13 @@ def write_run_config(run_dir, config):
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
 
+def load_run_config(run_dir):
+    config_path = os.path.join(run_dir, "config.json")
+    if not os.path.exists(config_path):
+        return None
+    with open(config_path, "r") as f:
+        return json.load(f)
+
 # Function to train the static model. It sets up the parameters, creates the model and dataset, and trains the model while saving the configuration.
 def static():
     lr = 0.001 # 0.001 for CNN1D3D, 0.0001 for CNN1D
@@ -38,24 +45,38 @@ def static():
     channels=16
 
     runs_root = "./runs/static"
+    resume_checkpoint_path = None
+    if resume_run_id_static:
+        run_dir = os.path.join(runs_root, resume_run_id_static)
+        config = load_run_config(run_dir)
+        if config:
+            lr = config.get("lr", lr)
+            batch = config.get("batch", batch)
+            epochs = config.get("epochs", epochs)
+            channels = config.get("channels", channels)
+            a_list = [config.get("a", a_list[0])]
+            predicted_time_list = [config.get("predicted_time", predicted_time_list[0])]
+        resume_checkpoint_path = os.path.join(run_dir, f"{resume_run_id_static}.pth")
+
     for predicted_time in predicted_time_list:
         for a in a_list:
-            run_id = make_run_id("static")
+            run_id = resume_run_id_static or make_run_id("static")
             run_dir = os.path.join(runs_root, run_id)
-            config = {
-                "run_id": run_id,
-                "model_class": "PICNN_static",
-                "predicted_time": predicted_time,
-                "a": a,
-                "lr": lr,
-                "batch": batch,
-                "epochs": epochs,
-                "channels": channels,
-                "seed": seed,
-                "dataset_version": "unknown",
-                "tags": ["static", f"a{a}"],
-            }
-            write_run_config(run_dir, config)
+            if not resume_run_id_static:
+                config = {
+                    "run_id": run_id,
+                    "model_class": "PICNN_static",
+                    "predicted_time": predicted_time,
+                    "a": a,
+                    "lr": lr,
+                    "batch": batch,
+                    "epochs": epochs,
+                    "channels": channels,
+                    "seed": seed,
+                    "dataset_version": "unknown",
+                    "tags": ["static", f"a{a}"],
+                }
+                write_run_config(run_dir, config)
             loss_fn = CombinedLoss(a=a,predicted_time=predicted_time,device=device)
             #loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
 
@@ -65,7 +86,8 @@ def static():
 
             model.train_model(dataset = dataset, num_epochs= epochs,batch_size= batch,
                               learning_rate=lr, model_name=model_name, save_path=runs_root,
-                              run_id=run_id, a=a, channels=channels, seed=seed)
+                              run_id=run_id, a=a, channels=channels, seed=seed,
+                              resume_checkpoint_path=resume_checkpoint_path)
 
 def dynamic():
 
@@ -79,10 +101,10 @@ def dynamic():
     model_dir = os.path.join(path, model_name)
     model_pth = os.path.join(model_dir, f"{model_name}.pth")
 
+    resume_checkpoint_path = None
     # Check if the model directory and the specific model file exist
     if os.path.exists(model_dir) and os.path.isfile(model_pth):
-        # Load the model
-        model.load_state_dict(torch.load(model_pth))
+        resume_checkpoint_path = model_pth
         print(f"The model '{model_name}' already exists and will be trained further.")
     else:
         # If the directory or model file doesn't exist, print this message
@@ -110,7 +132,8 @@ def dynamic():
     print(f'Train Model:')
     model.train_model(a=a, dataset=dataset, num_epochs=epochs, batch_size=batch,
                       learning_rate=lr, model_name=model_name, save_path=path,
-                      run_id=run_id, channels=channels, seed=seed)
+                      run_id=run_id, channels=channels, seed=seed,
+                      resume_checkpoint_path=resume_checkpoint_path)
 
 
 if __name__ == '__main__':
@@ -132,6 +155,7 @@ if __name__ == '__main__':
     model = PECNN_dynamic_timefirst(c=channels).to(device)
     path = f'./runs/dynamic'
     resume_run_id = None
+    resume_run_id_static = None
 
     for a in [1,0]:
         dynamic()

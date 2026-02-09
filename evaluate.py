@@ -14,6 +14,13 @@ from training_class import CombinedLoss_dynamic
 
 # with  make_evaluation_table(...) makes a folder in ./plots/[Modell] and plots for each Testexperiment different
 # timestep deviations if the Model for corresponding timestep exists
+def load_model_state(model, model_pth, device):
+    checkpoint = torch.load(model_pth, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        model.load_state_dict(checkpoint)
+
 def denormalize(tensor):
     tensor_denorm = tensor * dist +min
     return tensor_denorm
@@ -181,9 +188,8 @@ def make_evaluation_table(a=1,lr=0.001,epochs=50,batch=32,channels=16):
 
                     model_subdir = os.path.join(predicted_time_dir, model_name) # ./models/predicted_time=t/PICNN
                     model_pth = os.path.join(model_subdir, f'{model_name}.pth')
-                    model_state_dict = torch.load(model_pth, map_location=device) # load statedictionary
                     try:
-                        model.load_state_dict(model_state_dict)
+                        load_model_state(model, model_pth, device)
                         print(f'Model = {model_name} loaded')
                     except Exception as e:
                         print(f"Failed to load model from {model_pth}: {e}")
@@ -263,9 +269,8 @@ def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,chan
 
 
     model_pth = os.path.join(dir, f'{model_name}.pth')
-    model_state_dict = torch.load(model_pth, map_location=device) # load statedictionary
     try:
-        model.load_state_dict(model_state_dict)
+        load_model_state(model, model_pth, device)
         print(f'Model = {model_name} loaded')
     except Exception as e:
         print(f"Failed to load model from {model_pth}: {e}")
