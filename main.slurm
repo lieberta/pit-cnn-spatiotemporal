@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=PECNN_TIMEFIRST_a=1-0		  # create a short name for your job
+#SBATCH --job-name=None		  # create a short name for your job
 
 #SBATCH --nodes=1                       # node count
 #SBATCH --ntasks=1                      # total number of tasks across all nodes
@@ -15,7 +15,8 @@
 #SBATCH --mail-user=lieberta@hsu-hh.de
 
 
-#SBATCH --output=terminal_output_main.log
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
  
 module purge
 
@@ -30,5 +31,5 @@ conda activate /beegfs/home/l/lieberta/venv/penn-venv/
 # source ~/.virtualenvs/geospatial-time-series/bin/activate
 
 conda info --envs
- 
+
 python main.py

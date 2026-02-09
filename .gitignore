@@ -1,4 +1,6 @@
 data
 models
 plots
-run
+runs
+logs
+LOCAL_COMMANDS.md

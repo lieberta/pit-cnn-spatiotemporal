@@ -62,7 +62,7 @@ class Laplacian3DLayer(nn.Module):
 # This loss function calculates the physics loss based on the heat equation, which includes a temporal derivative, a spatial derivative (Laplacian), and a source term. 
 class HeatEquationLoss(nn.Module):
     def __init__(self, device, alpha = 0.0257, delta_t = 3., source_intensity=100000.0): # delta_t should be 1.
-        super(HeatEquationLoss, self).__init__(device)
+        super(HeatEquationLoss, self).__init__()
         self.alpha = alpha
         self.delta_t = delta_t
         self.laplacian_layer = Laplacian3DLayer(device)

@@ -55,3 +55,13 @@ derivative of output w.r.t. time
 
 training.py
 changes training class to a function
+
+Main training entrypoint (main.py)
+
+- run_mode: "static" or "dynamic" (set in __main__)
+- Shared params: channels, lr, batch, epochs
+- Static params: a_list_static, predicted_times, resume_run_id_static, runs_root_static
+- Dynamic params: a_list_dynamic, model_class_dynamic, model_name_dynamic, resume_run_id_dynamic, runs_root_dynamic
+
+Static uses PICNN_static and trains separate models per predicted_time.
+Dynamic uses model_class_dynamic and trains one model per run.

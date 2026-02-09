@@ -78,6 +78,7 @@ class HeatEquationMultiDataset_dynamic_memoryintensive(Dataset):
         target_tensor = self.targets[idx]
         return (input_tensor, predicted_time), target_tensor
 
+# 
 class HeatEquationMultiDataset_dynamic(Dataset):
     def __init__(self, modulo=10, base_path='./data/laplace_convolution/'):
         # Create list of folders

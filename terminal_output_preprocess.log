@@ -1,0 +1,34 @@
+# conda environments:
+#
+                         /beegfs/home/l/lieberta/venv/penn-venv
+base                  *  /cluster/anaconda3/2021.11
+
+device = cpu
+########################################
+#            Job Accounting            #
+########################################
+Name                : lieberta_preprocess_code:green
+User                : lieberta
+Account             : hsuper
+Partition           : small_gpu
+QOS                 : normal
+NNodes              : 1
+Nodes               : gpu03
+Cores               : 2 (1 physical)
+GPUs                : 0
+State               : COMPLETED
+ExitCode            : 0:0
+Submit              : 2024-07-08T11:30:38
+Start               : 2024-07-08T11:30:39
+End                 : 2024-07-08T11:30:54
+Waited              : 00:00:01
+Reserved walltime   : 23:59:00
+Used walltime       : 00:00:15
+Used CPU time       : 00:00:03 (Efficiency: 24.65%)
+% User (Computation): 74.82%
+% System (I/O)      : 25.18%
+Mem reserved        : 245000M
+Max Mem used        : 0.00  (gpu03)
+Max Disk Write      : 0.00  (gpu03)
+Max Disk Read       : 10.24K (gpu03)
+Energy (CPU+Mem)    : 0.00kWh (0.00kg CO2, 0.00€)
