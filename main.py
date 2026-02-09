@@ -33,18 +33,7 @@ def load_run_config(run_dir):
         return json.load(f)
 
 # Function to train the static model. It sets up the parameters, creates the model and dataset, and trains the model while saving the configuration.
-def static():
-    lr = 0.001 # 0.001 for CNN1D3D, 0.0001 for CNN1D
-    batch = 32   # open for testing
-    epochs = 50
-
-
-    a_list = [1]
-    predicted_time_list= [1]
-    lr_list = [0.001]
-    channels=16
-
-    runs_root = "./runs/static"
+def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run_id_static, device, seed):
     resume_checkpoint_path = None
     if resume_run_id_static:
         run_dir = os.path.join(runs_root, resume_run_id_static)
@@ -54,42 +43,41 @@ def static():
             batch = config.get("batch", batch)
             epochs = config.get("epochs", epochs)
             channels = config.get("channels", channels)
-            a_list = [config.get("a", a_list[0])]
-            predicted_time_list = [config.get("predicted_time", predicted_time_list[0])]
+            a = config.get("a", a)
+            predicted_time = config.get("predicted_time", predicted_time)
         resume_checkpoint_path = os.path.join(run_dir, f"{resume_run_id_static}.pth")
 
-    for predicted_time in predicted_time_list:
-        for a in a_list:
-            run_id = resume_run_id_static or make_run_id("static")
-            run_dir = os.path.join(runs_root, run_id)
-            if not resume_run_id_static:
-                config = {
-                    "run_id": run_id,
-                    "model_class": "PICNN_static",
-                    "predicted_time": predicted_time,
-                    "a": a,
-                    "lr": lr,
-                    "batch": batch,
-                    "epochs": epochs,
-                    "channels": channels,
-                    "seed": seed,
-                    "dataset_version": "unknown",
-                    "tags": ["static", f"a{a}"],
-                }
-                write_run_config(run_dir, config)
-            loss_fn = CombinedLoss(a=a,predicted_time=predicted_time,device=device)
-            #loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
 
-            model = PICNN_static(loss_fn=loss_fn,channels=channels).to(device)
-            model_name = run_id
-            dataset = HeatEquationMultiDataset(predicted_time=predicted_time)
+    run_id = resume_run_id_static or make_run_id("static")
+    run_dir = os.path.join(runs_root, run_id)
+    if not resume_run_id_static:
+        config = {
+            "run_id": run_id,
+            "model_class": "PICNN_static",
+            "predicted_time": predicted_time,
+            "a": a,
+            "lr": lr,
+            "batch": batch,
+            "epochs": epochs,
+            "channels": channels,
+            "seed": seed,
+            "dataset_version": "unknown",
+            "tags": ["static", f"a{a}"],
+        }
+        write_run_config(run_dir, config)
+    loss_fn = CombinedLoss(a=a, predicted_time=predicted_time, device=device)
+    #loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
 
-            model.train_model(dataset = dataset, num_epochs= epochs,batch_size= batch,
-                              learning_rate=lr, model_name=model_name, save_path=runs_root,
-                              run_id=run_id, a=a, channels=channels, seed=seed,
-                              resume_checkpoint_path=resume_checkpoint_path)
+    model = PICNN_static(loss_fn=loss_fn, channels=channels).to(device)
+    model_name = run_id
+    dataset = HeatEquationMultiDataset(predicted_time=predicted_time)
 
-def dynamic():
+    model.train_model(dataset=dataset, num_epochs=epochs, batch_size=batch,
+                      learning_rate=lr, model_name=model_name, save_path=runs_root,
+                      run_id=run_id, a=a, channels=channels, seed=seed,
+                      resume_checkpoint_path=resume_checkpoint_path)
+
+def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed):
 
     # a function that takes all important parameter as input, creates and trains the model
     print('Create Combined loss')
@@ -98,13 +86,21 @@ def dynamic():
 
     run_id = resume_run_id or make_run_id("dynamic")
     model_name = run_id
-    model_dir = os.path.join(path, model_name)
+    model_dir = os.path.join(runs_root, model_name)
     model_pth = os.path.join(model_dir, f"{model_name}.pth")
 
     resume_checkpoint_path = None
     # Check if the model directory and the specific model file exist
     if os.path.exists(model_dir) and os.path.isfile(model_pth):
         resume_checkpoint_path = model_pth
+        config = load_run_config(model_dir)
+        if config:
+            lr = config.get("lr", lr)
+            batch = config.get("batch", batch)
+            epochs = config.get("epochs", epochs)
+            channels = config.get("channels", channels)
+            a = config.get("a", a)
+            name = config.get("name", name)
         print(f"The model '{model_name}' already exists and will be trained further.")
     else:
         # If the directory or model file doesn't exist, print this message
@@ -124,14 +120,16 @@ def dynamic():
         }
         write_run_config(model_dir, config)
 
-    # loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
+    # CombinedLoss is a combination of MSE and Physics Loss
+    loss_fn = CombinedLoss_dynamic(a=a, device=device)
 
     print(f'Create Dataset HeatEquationMultiDatset_dynamic')
     # this is for version 2 'training_class':
     dataset = HeatEquationMultiDataset_dynamic()
+    model = model_class(c=channels).to(device)
     print(f'Train Model:')
     model.train_model(a=a, dataset=dataset, num_epochs=epochs, batch_size=batch,
-                      learning_rate=lr, model_name=model_name, save_path=path,
+                      learning_rate=lr, model_name=model_name, save_path=runs_root,
                       run_id=run_id, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
 
@@ -142,20 +140,40 @@ if __name__ == '__main__':
     print(f'device = {device}')
     print('Okaaay - Let\'s go...')
 
-    seed = 42
+    seed = 3141
     torch.manual_seed(seed)
 
+    run_mode = "static"  # "static" | "dynamic"
+    runs_root_static = "./runs/static"
+    runs_root_dynamic = "./runs/dynamic"
+
+    # Shared training parameters
     channels = 16
     lr = 0.001
     batch = 32 * 8
     epochs = 10
-    a = 1
-    # dataloader uses only 1/10 of the actual data!!!!!!!!!! -> small dataset
-    name = f'PECNN_TIMEFIRST.V1.1_dynamic_smalltest'
-    model = PECNN_dynamic_timefirst(c=channels).to(device)
-    path = f'./runs/dynamic'
-    resume_run_id = None
+
+    # Static parameters
+    a_list_static = [1, 0]
+    predicted_times = [0.5, 3, 10]
     resume_run_id_static = None
 
-    for a in [1,0]:
-        dynamic()
+    # Dynamic parameters
+    a_list_dynamic = [1, 0]
+    model_class_dynamic = PECNN_dynamic
+    model_name_dynamic = "PECNN_dynamic_smalldatasettest"
+    resume_run_id_dynamic = None
+
+    if run_mode == "static":
+        for a in a_list_static:
+            for t in predicted_times:
+                static(predicted_time=t, a=a, lr=lr, batch=batch, epochs=epochs, channels=channels,
+                       runs_root=runs_root_static, resume_run_id_static=resume_run_id_static,
+                       device=device, seed=seed)
+
+    if run_mode == "dynamic":
+        for a in a_list_dynamic:
+            dynamic(a=a, lr=lr, batch=batch, epochs=epochs, channels=channels,
+                    model_class=model_class_dynamic, name=model_name_dynamic,
+                    runs_root=runs_root_dynamic, resume_run_id=resume_run_id_dynamic,
+                    device=device, seed=seed)
