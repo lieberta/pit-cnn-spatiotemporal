@@ -11,7 +11,7 @@ This repo contains tools to simulate heat transfer, preprocess data, train neura
 Runs a 3D transient heat equation with random rectangular heat sources (“fireplaces”).
 
 ```bash
-python heat_sim_class.py
+python -m simulation.heat_sim_class
 ```
 
 Saves results in ./data/testset/experiment_* with: <br>
@@ -26,7 +26,7 @@ fireplace_simulation_results.txt → metadata <br>
 Normalize temperature fields across all experiments.
 
 ```bash
-python preprocess.py
+python -m simulation.preprocess
 ```
 
 Computes global min/max <br>

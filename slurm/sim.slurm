@@ -29,4 +29,4 @@ source ~/.virtualenvs/geospatial-time-series/bin/activate
 
 conda info --envs
  
-python heat_sim_class.py
+python -m simulation.heat_sim_class

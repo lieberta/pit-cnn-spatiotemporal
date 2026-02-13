@@ -3,7 +3,8 @@ import re
 import os
 from pathlib import Path
 from dataset import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
-from models import PICNN_static, PECNN_dynamic
+from models.picnn_static import PICNN_static
+from models.pitcnn_latenttime import PITCNN_dynamic
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,7 +12,7 @@ import json
 import pandas as pd
 import matplotlib.colors as mcolors
 from matplotlib.colors import LinearSegmentedColormap
-from training_class import CombinedLoss_dynamic
+from training.loss import CombinedLoss_dynamic
 
 # with  make_evaluation_table(...) makes a folder in ./plots/[Modell] and plots for each Testexperiment different
 # timestep deviations if the Model for corresponding timestep exists
@@ -332,7 +333,7 @@ def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,chan
 
                 # Collect evaluation data
                 eval_data.append({
-                    "Model": "PECNN",
+                    "Model": "PITCNN",
                     "Physics Loss Scalar": a,
                     "Batch": batch,
                     "Learning Rate": lr,
@@ -426,14 +427,14 @@ if __name__ == '__main__':
 
 
     # modelname list: pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
-    mn_list = [f'PECNN_dynamic_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
-               f'PECNN_dynamic_batchnorm_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
-               f'PECNN_dynamic_no_time_normalization_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
-               f'PECNN_dynamic_smalltest_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}_autodiff={autodiff}']
+    mn_list = [f'PITCNN_dynamic_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PITCNN_dynamic_batchnorm_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PITCNN_dynamic_no_time_normalization_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}',
+               f'PITCNN_dynamic_smalltest_loss={a}xPhysicsLoss+MSE_lr={lr}_batch{batch}_channels={channels}_autodiff={autodiff}']
 
     # dataloader uses only 1/10 of the actual data!!!!!!!!!! -> small dataset
     name = mn_list[3]
-    model = PECNN_dynamic(c=channels).to(device)
+    model = PITCNN_dynamic(c=channels).to(device)
     # pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
     make_evaluation_table_dynamic(name, model, a,lr,batch,channels)
 

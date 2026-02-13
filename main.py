@@ -1,8 +1,10 @@
 
-from models import PICNN_static, PECNN_dynamic, PECNN_dynamic_batchnorm, PECNN_dynamic_timefirst, PECNN_dynamic_latenttime1
+from models.picnn_static import PICNN_static
+from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
+from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
 from dataset import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
 import torch
-from training_class import CombinedLoss, CombinedLoss_dynamic
+from training.loss import CombinedLoss, CombinedLoss_dynamic
 import os
 import json
 import datetime
@@ -165,7 +167,7 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
     loss_fn = CombinedLoss_dynamic(a=a, device=device)
 
     print(f'Create Dataset HeatEquationMultiDatset_dynamic')
-    # this is for version 2 'training_class':
+    # this is for version 2 training package:
     dataset = HeatEquationMultiDataset_dynamic()
     model = model_class(c=channels).to(device)
     print(f'Train Model:')
@@ -207,8 +209,8 @@ if __name__ == '__main__':
 
     # Dynamic parameters
     a_list_dynamic = [0, 1]
-    model_class_dynamic = PECNN_dynamic_latenttime1
-    model_name_dynamic = "PECNN_dynamic_latenttime1"
+    model_class_dynamic = PITCNN_dynamic_latenttime1
+    model_name_dynamic = "PITCNN_dynamic_latenttime1"
     resume_run_ids_dynamic = []  # z.B. ["dynamic_20260101-120000_ab12cd", "dynamic_20260102-130000_ef34gh"]
     auto_collect_dynamic = False    # True if i want to further train my existing models
 
@@ -226,7 +228,7 @@ if __name__ == '__main__':
         resume_run_ids_dynamic = collect_run_ids(
             runs_root="./runs",
             mode="dynamic",
-            model_name="PECNN_dynamic_latenttime1",
+            model_name="PITCNN_dynamic_latenttime1",
         )
         print(f"Auto-collected dynamic run IDs: {resume_run_ids_dynamic}")
 
