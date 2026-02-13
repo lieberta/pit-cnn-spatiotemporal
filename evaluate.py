@@ -1,6 +1,7 @@
 import torch
 import re
 import os
+from pathlib import Path
 from dataset import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
 from models import PICNN_static, PECNN_dynamic
 from torch.utils.data import DataLoader
@@ -20,6 +21,56 @@ def load_model_state(model, model_pth, device):
         model.load_state_dict(checkpoint["model_state_dict"])
     else:
         model.load_state_dict(checkpoint)
+
+
+def load_run_config(run_dir):
+    config_path = Path(run_dir) / "config.json"
+    if not config_path.exists():
+        return None
+    try:
+        with config_path.open("r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def find_run_dir_by_id(mode_root, run_id):
+    mode_root = Path(mode_root)
+    direct = mode_root / run_id
+    if direct.is_dir():
+        return direct
+
+    for config_path in mode_root.rglob("config.json"):
+        run_dir = config_path.parent
+        if run_dir.name == run_id:
+            return run_dir
+    return None
+
+
+def resolve_dynamic_run(model_name_or_run_id, runs_root="./runs/dynamic"):
+    mode_root = Path(runs_root)
+
+    # 1) Direct run-id lookup across nested model folders.
+    run_dir = find_run_dir_by_id(mode_root, model_name_or_run_id)
+    if run_dir is not None:
+        run_id = run_dir.name
+        model_pth = run_dir / f"{run_id}.pth"
+        if model_pth.exists():
+            return run_id, str(model_pth), str(run_dir)
+
+    # 2) Treat input as model group and pick latest run.
+    group_dir = mode_root / model_name_or_run_id
+    if group_dir.is_dir():
+        run_dirs = [p for p in group_dir.iterdir() if p.is_dir() and (p / "config.json").exists()]
+        if run_dirs:
+            run_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            run_dir = run_dirs[0]
+            run_id = run_dir.name
+            model_pth = run_dir / f"{run_id}.pth"
+            if model_pth.exists():
+                return run_id, str(model_pth), str(run_dir)
+
+    return None, None, None
 
 def denormalize(tensor):
     tensor_denorm = tensor * dist +min
@@ -109,137 +160,86 @@ def plot_heat_distribution(input_tensor, target, output, folder_path, predicted_
     plt.ylabel('Z')
     plt.savefig(os.path.join(folder_path, f'deviation_at_time_{predicted_time}.png'))
     plt.close()
-def plot_heat_distribution(input_tensor, target, output, folder_path, predicted_time):
-    # Assuming some previous code defines x_fire, y_fire
-    x_fire, y_fire = find_fire(input_tensor)  # You need to implement this based on your specific logic
-
-    # Calculate deviation
-    deviation = torch.abs(target - output)
-
-    # Plot Target
-    plt.figure()
-    plt.imshow(target[0, 0, :, y_fire, :].cpu().numpy().T, cmap=cmap, extent=(0, 64, 0, 16), origin='lower',
-               vmin=-20, vmax=1000)
-    plt.colorbar(label='Temperature (°C)')
-    plt.title(f'Target at time {predicted_time}s')
-    plt.xlabel('X')
-    plt.ylabel('Z')
-    plt.savefig(os.path.join(folder_path, f'target_at_time_{predicted_time}.png'))
-    plt.close()
-
-    # Plot Output
-    plt.figure()
-    plt.imshow(output[0, 0, :, y_fire, :].cpu().numpy().T, cmap=cmap, extent=(0, 64, 0, 16), origin='lower',
-               vmin=-20, vmax=1000)
-    plt.colorbar(label='Temperature (°C)')
-    plt.title(f'Output at time {predicted_time}s')
-    plt.xlabel('X')
-    plt.ylabel('Z')
-    plt.savefig(os.path.join(folder_path, f'output_at_time_{predicted_time}.png'))
-    plt.close()
-
-    # Plot Deviation
-    plt.figure()
-    plt.imshow(deviation[0, 0, :, y_fire, :].cpu().numpy().T, cmap=cmap, extent=(0, 64, 0, 16), origin='lower',
-               vmin=0, vmax=np.max(deviation.cpu().numpy()))  # Keep the max deviation color mapping as it was
-    plt.colorbar(label='Deviation (°C)')
-    plt.title(f'Deviation at time {predicted_time}')
-    plt.xlabel('X')
-    plt.ylabel('Z')
-    plt.savefig(os.path.join(folder_path, f'deviation_at_time_{predicted_time}.png'))
-    plt.close()
-
-# Plots a comparison between target and output
-
-# makes a table that evaluates the mean deviation of a model for multiple experiments
-# uses function plot_heat_distribution to make plots of a room slice output / target / deviation for all test Experiments
 def make_evaluation_table(a=1,lr=0.001,epochs=50,batch=32,channels=16):
 
     device = ("cuda" if torch.cuda.is_available() else "cpu")
-    base_dir = './models'
+    base_dir = Path('./runs/static')
     eval_data = []
-    base_subdir_list = os.listdir(base_dir)
-    # Define the regular expression pattern for matching 'predicted_time=' followed by a number
-    pattern = r"predicted_time=(?P<predicted_time>[\d.]+)"
 
     # load the model
     model = PICNN_static(torch.nn.MSELoss(),channels).to(device).double()
+    if not base_dir.exists():
+        print(f"Directory does not exist: {base_dir}")
+        return
 
-    # List to hold the paths of the matching subfolders
-    matching_subfolders_with_times = []
+    for config_path in sorted(base_dir.rglob("config.json")):
+        run_dir = config_path.parent
+        run_id = run_dir.name
+        config = load_run_config(run_dir)
+        if config is None:
+            continue
 
-    for subdir in base_subdir_list: # subdir = modelnames
-        print(f'subdir={subdir}')
-        if f'predicted_time=' in subdir:
-            # Search the directory name with the pattern to find 'predicted_time'
-            match = re.search(pattern, subdir)
-            if match:
-                # Extract the 'predicted_time' value from the match object
-                predicted_time = match.group('predicted_time')
-                # Store the directory name along with the extracted predicted_time
-                matching_subfolders_with_times.append((subdir, predicted_time)) # predicted_time t
-                # print(f'predicted time ={predicted_time}')
+        if config.get("model_class") != "PICNN_static":
+            continue
+        if config.get("a") != a:
+            continue
+        if config.get("lr") != lr:
+            continue
+        if config.get("batch") != batch:
+            continue
+        if config.get("channels") != channels:
+            continue
 
-            predicted_time_dir = os.path.join(base_dir, subdir) # ./models/predicted_time=t
+        predicted_time = float(config.get("predicted_time"))
+        model_pth = run_dir / f"{run_id}.pth"
+        if not model_pth.exists():
+            print(f"Skipping run without checkpoint: {model_pth}")
+            continue
 
-            # iterate through the predicted_time subfolder
-            for model_name in os.listdir(predicted_time_dir):
-                if f'PICNN_predictedtime{predicted_time}s_loss={a}xPhysicsLoss+MSE_lr={lr}_epoch{epochs}_batch{batch}_channels={channels}' in model_name:
+        try:
+            load_model_state(model, str(model_pth), device)
+            print(f'Model loaded: {run_id}')
+        except Exception as e:
+            print(f"Failed to load model from {model_pth}: {e}")
+            continue
 
-                    model_subdir = os.path.join(predicted_time_dir, model_name) # ./models/predicted_time=t/PICNN
-                    model_pth = os.path.join(model_subdir, f'{model_name}.pth')
-                    try:
-                        load_model_state(model, model_pth, device)
-                        print(f'Model = {model_name} loaded')
-                    except Exception as e:
-                        print(f"Failed to load model from {model_pth}: {e}")
-                        break  # Skip that model, if dictionary won't match
+        dataset = HeatEquationMultiDataset(base_path=testset_path, predicted_time=predicted_time)
+        dataloader = DataLoader(dataset=dataset, shuffle=False, batch_size=1)
 
+        eval_subdir = f'./plots/static_{run_id}'
+        os.makedirs(eval_subdir, exist_ok=True)
+        deviation_file_path = os.path.join(eval_subdir, 'deviations.txt')
 
-                    dataset = HeatEquationMultiDataset(base_path=testset_path, predicted_time = float(predicted_time))
-                    dataloader = DataLoader(dataset=dataset, shuffle=False, batch_size=1)
+        with open(deviation_file_path, 'w') as deviation_file:
+            deviation_file.write("Mean Deviations:\n")
 
+            for experiment_idx, (input_tensor, target) in enumerate(dataloader):
+                input_tensor = input_tensor.to(device)
+                target = target.to(device)
+                target_denorm = denormalize(target).to(device)
+                input_denorm, output_denorm = predict_and_denormalize(model, input_tensor)
 
-                    # Evaluate the model
-                    model_name_timeless = f'PICNN_loss={a}xPhysicsLoss+MSE_lr={lr}_epoch{epochs}_batch{batch}_channels={channels}'
-                    eval_subdir = f'./plots/'+model_name_timeless
-                    os.makedirs(eval_subdir, exist_ok=True) # generates a folder for one type of Architecture for multiple time steps
-                    deviation_file_path = os.path.join(eval_subdir, 'deviations.txt')
+                mean_deviation = torch.mean(torch.abs(target - output_denorm)).item()
 
-                    with open(deviation_file_path, 'w') as deviation_file:
-                        deviation_file.write("Mean Deviations:\n")
+                eval_data.append({
+                    "Model": "PICNN_static",
+                    "Run ID": run_id,
+                    "Predicted Second": predicted_time,
+                    "Physics Loss Scalar": a,
+                    "Epoch": epochs,
+                    "Batch": batch,
+                    "Learning Rate": lr,
+                    "Experiment": f"Experimentindex {experiment_idx}",
+                    "Mean Deviation": mean_deviation
+                })
 
-                        for experiment_idx, (input_tensor, target) in enumerate(dataloader):
-                            input_tensor = input_tensor.to(device)
-                            target = target.to(device)
-                            target_denorm = denormalize(target).to(device)
-                            input_denorm, output_denorm = predict_and_denormalize(model, input_tensor)
+                deviation_str = f'Mean Deviation for {run_id}, Data {experiment_idx}: {mean_deviation}\n'
+                print(deviation_str.strip())
+                deviation_file.write(deviation_str)
 
-
-                            # calculate mean deviation:
-                            mean_deviation = torch.mean(torch.abs(target - output_denorm)).item()
-
-                            # Collect evaluation data
-                            eval_data.append({
-                                "Model": "PECNN",
-                                "Predicted Second": predicted_time,
-                                "Physics Loss Scalar": a,
-                                "Epoch": epochs,
-                                "Batch": batch,
-                                "Learning Rate": lr,
-                                "Experiment": f"Experimentindex {experiment_idx}",
-                                "Mean Deviation": mean_deviation
-                            })
-
-                            deviation_str = f'Mean Deviation for {model_name}, Data {experiment_idx}: {mean_deviation}\n'
-                            print(deviation_str.strip())
-
-                            deviation_file.write(deviation_str)
-
-                            heat_plot_folder = os.path.join(eval_subdir, f'experiment{experiment_idx}')
-                            os.makedirs(heat_plot_folder, exist_ok=True)
-                            plot_heat_distribution(input_denorm, target_denorm, output_denorm, heat_plot_folder,
-                                                   predicted_time)
+                heat_plot_folder = os.path.join(eval_subdir, f'experiment{experiment_idx}')
+                os.makedirs(heat_plot_folder, exist_ok=True)
+                plot_heat_distribution(input_denorm, target_denorm, output_denorm, heat_plot_folder, predicted_time)
     # Convert collected data to DataFrame
     #df_eval = pd.DataFrame(eval_data)
 
@@ -257,7 +257,7 @@ def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,chan
     # plots heat and error destributions
 
 
-    base_dir = './models/dynamic'
+    base_dir = './runs/dynamic'
     eval_data = []
 
     loss_fn = CombinedLoss_dynamic(a=a, device=device)
@@ -265,15 +265,17 @@ def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,chan
     print(f'Combined Loss created \n Load Model')
 
 
-    dir = base_dir+'/'+model_name
+    resolved_run_id, model_pth, run_dir = resolve_dynamic_run(model_name, runs_root=base_dir)
+    if model_pth is None:
+        print(f"Could not resolve dynamic model/run '{model_name}' in {base_dir}")
+        return
 
-
-    model_pth = os.path.join(dir, f'{model_name}.pth')
     try:
         load_model_state(model, model_pth, device)
-        print(f'Model = {model_name} loaded')
+        print(f'Model = {resolved_run_id} loaded')
     except Exception as e:
         print(f"Failed to load model from {model_pth}: {e}")
+        return
 
 
 
@@ -283,7 +285,7 @@ def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,chan
 
     # Evaluate the model
 
-    eval_subdir = f'./plots/'+model_name
+    eval_subdir = f'./plots/{resolved_run_id}'
     os.makedirs(eval_subdir, exist_ok=True) # generates a folder for one type of Architecture for multiple time steps
     deviation_file_path = os.path.join(eval_subdir, 'deviations.txt')
 
@@ -338,7 +340,7 @@ def make_evaluation_table_dynamic(model_name, model, a=1,lr=0.001,batch=256,chan
                     "Time and Mean Deviation": f'(time={t}, mean_deviation)'
                 })
 
-                deviation_str = f'Mean Deviation for {model_name}, Data {experiment_idx}, Time {t}: {mean_deviation}\n'
+                deviation_str = f'Mean Deviation for {resolved_run_id}, Data {experiment_idx}, Time {t}: {mean_deviation}\n'
                 print(deviation_str.strip())
 
                 deviation_file.write(deviation_str)

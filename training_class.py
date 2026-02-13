@@ -4,11 +4,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import numpy as np
 import math
 import time
 import os # to check if a plot already exists
-import json
 import torch.profiler
 import csv
 
@@ -33,6 +31,35 @@ def append_metrics_row(csv_path, header, row):
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+
+
+def load_loss_history_from_metrics(metrics_path):
+    if not os.path.exists(metrics_path):
+        return [], [], []
+
+    # Keep the last entry per epoch to handle resumed runs written multiple times.
+    by_epoch = {}
+    with open(metrics_path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                epoch = int(row["epoch"])
+                train_loss = float(row["train_loss"])
+                val_loss = float(row["val_loss"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_epoch[epoch] = (train_loss, val_loss)
+
+    epochs = sorted(by_epoch.keys())
+    train_losses = [by_epoch[e][0] for e in epochs]
+    val_losses = [by_epoch[e][1] for e in epochs]
+    return epochs, train_losses, val_losses
+
+
+def fallback_loss_history(num_epochs, train_losses, val_losses):
+    count = min(len(train_losses), len(val_losses))
+    epochs = list(range(1, count + 1))
+    return epochs, train_losses[:count], val_losses[:count]
 
 ######################################
 # physical contrains to make sure, that the temporal deviation and the spatial deviation has been
@@ -283,9 +310,15 @@ class BaseModel(nn.Module):
 
 
 
-        self.save_loss_plot(model_name, num_epochs, train_losses, val_losses,save_path)
+        metrics_path = os.path.join(save_path, model_name, "metrics.csv")
+        epochs_all, train_losses_all, val_losses_all = load_loss_history_from_metrics(metrics_path)
+        if not epochs_all:
+            epochs_all, train_losses_all, val_losses_all = fallback_loss_history(
+                num_epochs, train_losses, val_losses
+            )
+
+        self.save_loss_plot(model_name, epochs_all, train_losses_all, val_losses_all, save_path)
         self.save_proc_time(model_name, tic,save_path)
-        self.save_losses_data(model_name, num_epochs, train_losses, val_losses,save_path)
 
 
 
@@ -331,10 +364,7 @@ class BaseModel(nn.Module):
         model_path = os.path.join(model_dir, f"{model_name}.pth")
         torch.save(self.state_dict(), model_path)''' # save the endmodel to its name
 
-    def save_loss_plot(self, model_name, num_epochs, train_losses, val_losses, save_path):
-        # Create a list of epochs for the x-axis
-        epochs = range(1, num_epochs + 1)
-
+    def save_loss_plot(self, model_name, epochs, train_losses, val_losses, save_path):
         # Create the losses plot
         plt.figure(figsize=(10, 5))
         plt.plot(epochs, train_losses, label='Train Loss', color='blue') #  HTML color names are possible
@@ -365,27 +395,6 @@ class BaseModel(nn.Module):
         formatted_time = time.strftime("%H:%M:%S", time.gmtime(proc_time))
         with open(proc_time_filename, "w") as file:
             file.write(f"Training process duration: {formatted_time}")
-
-    def save_losses_data(self, model_name, epochs, train_losses, val_losses,save_path):
-        # Create a dictionary to store losses data
-        losses_data = {
-            'epochs': epochs,
-            'train_losses': train_losses,
-            'val_losses': val_losses
-        }
-
-
-        # Save the losses data as a NumPy .npz file
-        model_dir = os.path.join(save_path, model_name)
-        losses_data_filename = os.path.join(model_dir, f"losses_data_{model_name}.npz")
-        np.savez(losses_data_filename, **losses_data)
-
-        # save the losses in .txt
-        filename = os.path.join(model_dir,'losses_data.txt')
-
-        # Save the dictionary to a text file in JSON format
-        with open(filename, 'w') as file:
-            json.dump(losses_data, file)
 
 class BaseModel_dynamic(nn.Module):
     # The BaseModel for the dynamic method, where each timestep is trained in one model
@@ -490,9 +499,15 @@ class BaseModel_dynamic(nn.Module):
 
             self.save_model(epoch, model_name, save_path, optimizer)
 
-        self.save_loss_plot(model_name, num_epochs, train_losses, val_losses, save_path)
+        metrics_path = os.path.join(save_path, model_name, "metrics.csv")
+        epochs_all, train_losses_all, val_losses_all = load_loss_history_from_metrics(metrics_path)
+        if not epochs_all:
+            epochs_all, train_losses_all, val_losses_all = fallback_loss_history(
+                num_epochs, train_losses, val_losses
+            )
+
+        self.save_loss_plot(model_name, epochs_all, train_losses_all, val_losses_all, save_path)
         self.save_proc_time(model_name, tic, save_path)
-        self.save_losses_data(model_name, num_epochs, train_losses, val_losses, save_path)
 
 
 
@@ -538,10 +553,7 @@ class BaseModel_dynamic(nn.Module):
         model_path = os.path.join(model_dir, f"{model_name}.pth")
         torch.save(self.state_dict(), model_path)''' # save the endmodel to its name
 
-    def save_loss_plot(self, model_name, num_epochs, train_losses, val_losses, save_path):
-        # Create a list of epochs for the x-axis
-        epochs = range(1, num_epochs + 1)
-
+    def save_loss_plot(self, model_name, epochs, train_losses, val_losses, save_path):
         # Create the losses plot
         plt.figure(figsize=(10, 5))
         plt.plot(epochs, train_losses, label='Train Loss', color='blue') #  HTML color names are possible
@@ -572,28 +584,6 @@ class BaseModel_dynamic(nn.Module):
         formatted_time = time.strftime("%H:%M:%S", time.gmtime(proc_time))
         with open(proc_time_filename, "w") as file:
             file.write(f"Training process duration: {formatted_time}")
-
-    def save_losses_data(self, model_name, epochs, train_losses, val_losses,save_path):
-        # Create a dictionary to store losses data
-        losses_data = {
-            'epochs': epochs,
-            'train_losses': train_losses,
-            'val_losses': val_losses
-        }
-
-
-        # Save the losses data as a NumPy .npz file
-        model_dir = os.path.join(save_path, model_name)
-        losses_data_filename = os.path.join(model_dir, f"losses_data_{model_name}.npz")
-        np.savez(losses_data_filename, **losses_data)
-
-        # save the losses in .txt
-        filename = os.path.join(model_dir,'losses_data.txt')
-
-        # Save the dictionary to a text file in JSON format
-        with open(filename, 'w') as file:
-            json.dump(losses_data, file)
-
 
 if __name__ == '__main__':
     print('This is just a testing_env')

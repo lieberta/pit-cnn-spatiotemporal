@@ -1,4 +1,7 @@
-import math
+def test(a=1):
+    a = a
+    print (a)
 
-def swish(x):
-    return x* 1/(1+math.exp(-x))
+
+a = 2 
+test()

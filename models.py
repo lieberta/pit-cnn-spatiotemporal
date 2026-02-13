@@ -466,6 +466,87 @@ class PECNN_dynamic(BaseModel_dynamic):
 
         return x
 
+
+class PECNN_dynamic_latenttime1(PECNN_dynamic):
+"""
+Identical to PECNN_dynamic, but in the latent space the time input
+is appended as a single channel (instead of c*4 channels).
+"""
+    def __init__(self, c=8):
+        super().__init__(c=c)
+
+        # Override ONLY conv_m1: input channels now c*4 (latent) + 1 (time)
+        self.conv_m1 = nn.Conv3d(
+            self.c * 4 + 1,
+            self.c * 8,
+            kernel_size=3,
+            padding=1,
+            padding_mode='reflect'
+        )
+
+    def forward(self, x_input, time):
+        x = x_input
+
+        # Encoder Block 1
+        x = F.gelu(self.gn11(self.conv11(x)))
+        x_cross1 = F.gelu(self.gn12(self.conv12(x)))
+        x = self.avgpool(x_cross1)
+
+        # Encoder Block 2
+        x = F.gelu(self.gn21(self.conv21(x)))
+        x_cross2 = F.gelu(self.gn22(self.conv22(x)))
+        x = self.avgpool(x_cross2)
+
+        # Encoder Block 3
+        x = F.gelu(self.gn31(self.conv31(x)))
+        x_cross3 = F.gelu(self.gn32(self.conv32(x)))
+        x = self.avgpool(x_cross3)
+
+        # Middle forward:
+        batch, channels, x_dim, y_dim, z_dim = x.shape
+
+        # ---- ONLY CHANGE vs base: use exactly 1 time channel ----
+        time = time.view(batch, 1, 1, 1, 1)
+        time_channel = time.expand(batch, 1, x_dim, y_dim, z_dim)
+        # --------------------------------------------------------
+
+        x = torch.cat((x, time_channel), dim=-4)
+        x = F.gelu(self.gn_m1(self.conv_m1(x)))
+        x = F.gelu(self.gn_m2(self.conv_m2(x)))
+
+        # Decoder Block 1
+        x = self.up1(x)
+        x = torch.cat((x, x_cross3), dim=-4)
+        x = F.gelu(self.gn41(self.conv41(x)))
+        x = F.gelu(self.gn42(self.conv42(x)))
+
+        # Decoder Block 2
+        x = self.up2(x)
+        x = torch.cat((x, x_cross2), dim=-4)
+        x = F.gelu(self.gn51(self.conv51(x)))
+        x = F.gelu(self.gn52(self.conv52(x)))
+
+        # Decoder Block 3
+        x = self.up3(x)
+        x = torch.cat((x, x_cross1), dim=-4)
+        x = F.gelu(self.gn61(self.conv61(x)))
+        x = F.gelu(self.gn62(self.conv62(x)))
+
+        # Output
+        x = self.conv_end(x)
+
+        # Boundary Condition Padding
+        x[:, :, 0, :, :] = x_input[:, :, 0, :, :]
+        x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
+
+        x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
+        x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
+
+        x[:, :, :, :, 0] = x_input[0, 0, -1, -1, -1]
+        x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
+
+        return x
+
 class PECNN_dynamic_batchnorm(PECNN_dynamic):
     class PECNN_dynamic_batchnorm(PECNN_dynamic):
         def __init__(self, loss_fn, c=8):
