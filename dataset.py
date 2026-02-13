@@ -47,36 +47,51 @@ class HeatEquationMultiDataset(Dataset):
         return self.inputs[idx], self.targets[idx]
 
 
+class HeatEquationPINNDataset(Dataset):
+    """
+    PINN dataset for heat-equation fields stored in normalized_heat_equation_solution.npz.
+    Returns random collocation points and supervised temperatures from one experiment.
+    """
 
-class HeatEquationMultiDataset_dynamic_memoryintensive(Dataset):
-    def __init__(self, base_path='./data/laplace_convolution/'):
+    def __init__(self, base_path='./data/laplace_convolution/', points_per_sample=8192, modulo=1):
+        self.points_per_sample = int(points_per_sample)
+        self.files = []
 
-        # Create list of folders
         folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if
                    os.path.isdir(os.path.join(base_path, f)) and f.startswith('experiment')]
 
-        self.inputs = []
-        self.targets = []
-
-        # Load normalized data
-        for folder in folders:
+        for i, folder in enumerate(sorted(folders)):
+            if i % modulo != 0:
+                continue
             npz_file_path = os.path.join(folder, 'normalized_heat_equation_solution.npz')
             if os.path.exists(npz_file_path):
-                data = np.load(npz_file_path)['temperature']
-
-                for predicted_time in range(1, 101):  # These predicted times are 0.1 seconds long
-                    input_tensor = torch.tensor(data[0, :, :, :], dtype=torch.float64).unsqueeze(0)
-                    self.inputs.append((input_tensor, predicted_time*0.1))          # predicted_time*0.1 because my timesteps are 0.1 and my predicted time iterates from 1 to 100
-                    target_tensor = torch.tensor(data[int(predicted_time), :, :, :], dtype=torch.float64).unsqueeze(0)
-                    self.targets.append(target_tensor)
+                self.files.append(npz_file_path)
 
     def __len__(self):
-        return len(self.inputs)
+        return len(self.files)
 
     def __getitem__(self, idx):
-        input_tensor, predicted_time = self.inputs[idx]
-        target_tensor = self.targets[idx]
-        return (input_tensor, predicted_time), target_tensor
+        npz_file_path = self.files[idx]
+        data = np.load(npz_file_path)['temperature']  # (nt, nx, ny, nz)
+        nt, nx, ny, nz = data.shape
+
+        n = self.points_per_sample
+        t_idx = np.random.randint(0, nt, size=n)
+        x_idx = np.random.randint(0, nx, size=n)
+        y_idx = np.random.randint(0, ny, size=n)
+        z_idx = np.random.randint(0, nz, size=n)
+
+        t = t_idx / max(1, nt - 1)
+        x = x_idx / max(1, nx - 1)
+        y = y_idx / max(1, ny - 1)
+        z = z_idx / max(1, nz - 1)
+
+        coords = np.stack([x, y, z, t], axis=1).astype(np.float32)  # (n, 4)
+        target = data[t_idx, x_idx, y_idx, z_idx].astype(np.float32).reshape(-1, 1)  # (n, 1)
+
+        coords_tensor = torch.from_numpy(coords)
+        target_tensor = torch.from_numpy(target)
+        return coords_tensor, target_tensor
 
 # 
 class HeatEquationMultiDataset_dynamic(Dataset):
