@@ -27,9 +27,9 @@ class HeatEquationMultiDataset(Dataset):
             if os.path.exists(npz_file_path):
                 data = np.load(npz_file_path)['temperature']
 
-                inputs = torch.tensor(data[0, :, :, :], dtype=torch.float64).unsqueeze(0).unsqueeze(1)
+                inputs = torch.tensor(data[0, :, :, :], dtype=torch.float32).unsqueeze(0).unsqueeze(1)
 
-                targets = torch.tensor(data[int(predicted_time*10), :, :, :], dtype=torch.float64).unsqueeze(0).unsqueeze(1) # predicted second*10 since 10 timesteps in the data equals 1 second
+                targets = torch.tensor(data[int(predicted_time*10), :, :, :], dtype=torch.float32).unsqueeze(0).unsqueeze(1) # predicted second*10 since 10 timesteps in the data equals 1 second
 
                 self.inputs.append(inputs)
                 self.targets.append(targets)
@@ -123,9 +123,9 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             self.data_cache.clear()                                                     # new with cache clears the cache dictionary to not overload the memory
             self.data_cache[npz_file_path] = np.load(npz_file_path)['temperature']      # new with cache
         data = self.data_cache[npz_file_path] # new with cache, old: data = np.load(npz_file_path)['temperature']
-        input_tensor = torch.tensor(data[0, :, :, :], dtype=torch.float64).unsqueeze(0)
-        target_tensor = torch.tensor(data[predicted_time, :, :, :], dtype=torch.float64).unsqueeze(0)
-        predicted_time_tensor = torch.tensor([predicted_time * 0.1], dtype=torch.float64)  # Convert predicted time to tensor
+        input_tensor = torch.tensor(data[0, :, :, :], dtype=torch.float32).unsqueeze(0)
+        target_tensor = torch.tensor(data[predicted_time, :, :, :], dtype=torch.float32).unsqueeze(0)
+        predicted_time_tensor = torch.tensor([predicted_time * 0.1], dtype=torch.float32)  # Convert predicted time to tensor
         return (input_tensor, predicted_time_tensor), target_tensor
 
 

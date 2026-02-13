@@ -67,7 +67,7 @@ def collect_run_ids(runs_root="./runs", mode="both", a=None, model_name=None, mo
     return run_ids
 
 # Function to train the static model. It sets up the parameters, creates the model and dataset, and trains the model while saving the configuration.
-def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run_id_static, device, seed):
+def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run_id_static, device, seed, comment=None):
     model_group = "PICNN_static"
     model_root = os.path.join(runs_root, model_group)
     resume_checkpoint_path = None
@@ -100,6 +100,8 @@ def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run
             "dataset_version": "unknown",
             "tags": ["static", f"a{a}"],
         }
+        if comment:
+            config["comment"] = comment
         write_run_config(run_dir, config)
     loss_fn = CombinedLoss(a=a, predicted_time=predicted_time, device=device)
     #loss_choice = f'{a}xPhysicsLoss+MSE' # delete when no error
@@ -113,7 +115,7 @@ def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run
                       run_id=run_id, a=a, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
 
-def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed):
+def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed, comment=None):
 
     # a function that takes all important parameter as input, creates and trains the model
     print('Create Combined loss')
@@ -161,6 +163,8 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
             "tags": ["dynamic", f"a{a}"],
             "name": name,
         }
+        if comment:
+            config["comment"] = comment
         write_run_config(model_dir, config)
 
     # CombinedLoss is a combination of MSE and Physics Loss
@@ -184,6 +188,8 @@ if __name__ == '__main__':
     print('Okaaay - Let\'s go...')
 
     seed = None  # Set to an int for reproducible runs.
+    run_comment = "PhysicsLoss fixed: heat source and heat-source threshold are normalized."  # Optional: saved into config.json as "comment"
+    
     if seed is None:
         seed = random.randint(1, 100000)
         print(f'No seed provided. Generated random seed = {seed}')
@@ -208,9 +214,9 @@ if __name__ == '__main__':
     auto_collect_static = False
 
     # Dynamic parameters
-    a_list_dynamic = [0, 1]
-    model_class_dynamic = PITCNN_dynamic_latenttime1
-    model_name_dynamic = "PITCNN_dynamic_latenttime1"
+    a_list_dynamic = [1]
+    model_class_dynamic = PITCNN_dynamic_timefirst
+    model_name_dynamic = "PITCNN_timefirst_normsource"
     resume_run_ids_dynamic = []  # z.B. ["dynamic_20260101-120000_ab12cd", "dynamic_20260102-130000_ef34gh"]
     auto_collect_dynamic = False    # True if i want to further train my existing models
 
@@ -228,7 +234,7 @@ if __name__ == '__main__':
         resume_run_ids_dynamic = collect_run_ids(
             runs_root="./runs",
             mode="dynamic",
-            model_name="PITCNN_dynamic_latenttime1",
+            model_name="PITCNN_timefirst_normsource",
         )
         print(f"Auto-collected dynamic run IDs: {resume_run_ids_dynamic}")
 
@@ -237,13 +243,13 @@ if __name__ == '__main__':
             for run_id in resume_run_ids_static:
                 static(predicted_time=predicted_times[0], a=a_list_static[0], lr=lr, batch=batch, epochs=epochs,
                        channels=channels, runs_root=runs_root_static, resume_run_id_static=run_id,
-                       device=device, seed=seed)
+                       device=device, seed=seed, comment=run_comment)
         else:
             for a in a_list_static:
                 for t in predicted_times:
                     static(predicted_time=t, a=a, lr=lr, batch=batch, epochs=epochs, channels=channels,
                            runs_root=runs_root_static, resume_run_id_static=None,
-                           device=device, seed=seed)
+                           device=device, seed=seed, comment=run_comment)
 
     if run_mode == "dynamic":
         if resume_run_ids_dynamic:
@@ -251,10 +257,10 @@ if __name__ == '__main__':
                 dynamic(a=a_list_dynamic[0], lr=lr, batch=batch, epochs=epochs, channels=channels,
                         model_class=model_class_dynamic, name=model_name_dynamic,
                         runs_root=runs_root_dynamic, resume_run_id=run_id,
-                        device=device, seed=seed)
+                        device=device, seed=seed, comment=run_comment)
         else:
             for a in a_list_dynamic:
                 dynamic(a=a, lr=lr, batch=batch, epochs=epochs, channels=channels,
                         model_class=model_class_dynamic, name=model_name_dynamic,
                         runs_root=runs_root_dynamic, resume_run_id=None,
-                        device=device, seed=seed)
+                        device=device, seed=seed, comment=run_comment)

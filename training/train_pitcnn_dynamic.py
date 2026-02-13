@@ -35,8 +35,7 @@ class BaseModel_dynamic(nn.Module):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print("Device = " + device)
         self.to(device)
-        self.double()
-
+        
         train_losses = []
         val_losses = []
 
@@ -71,10 +70,10 @@ class BaseModel_dynamic(nn.Module):
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input_tuple, target) in enumerate(loop):
                 input, t = input_tuple
-                input = input.to(device)
-                t = t.to(device)
-                target = target.to(device)
-                output = self(input.double(), t)
+                input = input.to(device, dtype=torch.float32)
+                t = t.to(device, dtype=torch.float32)
+                target = target.to(device, dtype=torch.float32)
+                output = self(input, t)
 
                 loss = criterion(input, t, output, target)
 
@@ -93,10 +92,10 @@ class BaseModel_dynamic(nn.Module):
             with torch.no_grad():
                 for input_tuple, target in val_loader:
                     input, t = input_tuple
-                    input = input.to(device)
-                    t = t.to(device)
-                    target = target.to(device)
-                    output = self(input.double(), t)
+                    input = input.to(device, dtype=torch.float32)
+                    t = t.to(device, dtype=torch.float32)
+                    target = target.to(device, dtype=torch.float32)
+                    output = self(input, t)
                     loss = criterion(input, t, output, target)
                     val_loss += loss.item()
 

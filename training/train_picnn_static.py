@@ -36,8 +36,7 @@ class BaseModel(nn.Module):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print("Device = " + device)
         self.to(device)
-        self.double()
-
+        
         train_losses = []
         val_losses = []
 
@@ -71,16 +70,16 @@ class BaseModel(nn.Module):
             self.train()
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input, target) in enumerate(loop):
-                input = input.to(device)
-                target = target.to(device)
-                output = self(input.double())
+                input = input.to(device, dtype=torch.float32)
+                target = target.to(device, dtype=torch.float32)
+                output = self(input)
 
                 if isinstance(self.loss_fn, CombinedLoss):
                     loss = criterion(input, output, target)
                 else:
                     loss = criterion(output, target)
 
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item()
@@ -94,9 +93,9 @@ class BaseModel(nn.Module):
             self.eval()
             with torch.no_grad():
                 for input, target in val_loader:
-                    input = input.to(device)
-                    target = target.to(device)
-                    output = self(input.double())
+                    input = input.to(device, dtype=torch.float32)
+                    target = target.to(device, dtype=torch.float32)
+                    output = self(input)
                     if isinstance(self.loss_fn, CombinedLoss):
                         loss = criterion(input, output, target)
                     else:
