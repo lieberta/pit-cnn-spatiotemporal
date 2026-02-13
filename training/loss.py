@@ -8,12 +8,15 @@ class Laplacian3DLayer(nn.Module):
         super(Laplacian3DLayer, self).__init__()
         self.laplace_kernel_3d = torch.tensor(
             [[[[[0, 0, 0], [0, 1, 0], [0, 0, 0]], [[0, 1, 0], [1, -6, 1], [0, 1, 0]], [[0, 0, 0], [0, 1, 0], [0, 0, 0]]]]],
-            dtype=torch.float64,
+            dtype=torch.float32,
             requires_grad=False,
         ).to(device)
 
     def forward(self, x):
-        return F.conv3d(x, self.laplace_kernel_3d, padding=1, groups=x.shape[1])
+        kernel = self.laplace_kernel_3d
+        if kernel.dtype != x.dtype or kernel.device != x.device:
+            kernel = kernel.to(dtype=x.dtype, device=x.device)
+        return F.conv3d(x, kernel, padding=1, groups=x.shape[1])
 
 
 class HeatEquationLoss(nn.Module):
@@ -57,7 +60,24 @@ class CombinedLoss_dynamic(nn.Module):
         super(CombinedLoss_dynamic, self).__init__()
         self.alpha = alpha
         self.laplacian_layer = Laplacian3DLayer(device)
-        self.source_intensity = source_intensity
+        # Normalization-aware source term:
+        # Data is normalized as u_norm = (u - min_temp) / (max_temp - min_temp),
+        # so the source term must be scaled by the same range R.
+        #
+        # For data/testset/normalization_values.json:
+        # max_temp = 27373.34765625
+        # min_temp = 20.0
+        # R = max_temp - min_temp = 27353.34765625
+        #
+        # raw source_intensity = 100000.0
+        # source_intensity_norm = 100000.0 / 27353.34765625 = 3.65585
+        #
+        # old fire threshold (raw): 1000.0
+        # fire_threshold_norm = (1000.0 - 20.0) / 27353.34765625 = 0.035828
+        #
+        # This is a normalization correction because the loss is computed in normalized space.
+        self.source_intensity = source_intensity / 27353.34765625
+        self.fire_threshold = (1000.0 - 20.0) / 27353.34765625
         self.mse_loss = nn.MSELoss().to(device)
         self.a = a
 
@@ -66,7 +86,7 @@ class CombinedLoss_dynamic(nn.Module):
         return (output - input) / t
 
     def create_source_term(self, input_tensor):
-        mask = input_tensor > 1000
+        mask = input_tensor > self.fire_threshold
         source_term = torch.zeros_like(input_tensor)
         source_term[mask] = self.source_intensity
         return source_term
