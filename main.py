@@ -13,7 +13,7 @@ import random
 from pathlib import Path
 from types import SimpleNamespace
 from torchsummary import summary
-from list_run_ids import iter_run_configs, matches_filters
+from scripts.list_run_ids import iter_run_configs, matches_filters
 
 'This is the main file to run the training of the models. It includes functions to create unique run IDs, write configuration files, '
 'and train both static and dynamic models.'

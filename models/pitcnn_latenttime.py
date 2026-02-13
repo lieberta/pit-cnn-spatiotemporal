@@ -172,3 +172,4 @@ class PITCNN_dynamic_batchnorm(PITCNN_dynamic):
         self.gn52 = nn.BatchNorm3d(num_features=c * 2)
         self.gn61 = nn.BatchNorm3d(num_features=c)
         self.gn62 = nn.BatchNorm3d(num_features=c)
+        
