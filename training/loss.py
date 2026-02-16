@@ -20,18 +20,29 @@ class Laplacian3DLayer(nn.Module):
 
 
 class HeatEquationLoss(nn.Module):
-    def __init__(self, device, alpha=0.0257, delta_t=3.0, source_intensity=100000.0):
+    def __init__(
+        self,
+        device,
+        alpha=0.0257,
+        delta_t=3.0,
+        source_intensity=100000.0,
+        source_threshold=1000.0,
+        min_temp=20.0,
+        max_temp=27373.34765625,
+    ):
         super(HeatEquationLoss, self).__init__()
         self.alpha = alpha
         self.delta_t = delta_t
         self.laplacian_layer = Laplacian3DLayer(device)
-        self.source_intensity = source_intensity
+        temp_range = max_temp - min_temp
+        self.source_intensity = source_intensity / temp_range
+        self.source_threshold = (source_threshold - min_temp) / temp_range
 
     def temporal_derivative(self, u_next, u_current):
         return (u_next - u_current) / self.delta_t
 
     def create_source_term(self, input_tensor):
-        mask = input_tensor > 1000
+        mask = input_tensor > self.source_threshold
         source_term = torch.zeros_like(input_tensor)
         source_term[mask] = self.source_intensity
         return source_term

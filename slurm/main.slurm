@@ -32,4 +32,4 @@ conda activate /beegfs/home/l/lieberta/venv/penn-venv/
 
 conda info --envs
 
-python main.py
+python main.py --config "${TRAIN_CONFIG:-train_config.py}"

@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, random_split
 
 from dataset import HeatEquationPINNDataset
 from models.pinn import PINN
+from train_config import TRAIN_DTYPE
 
 
 def set_seed(seed):
@@ -47,8 +48,8 @@ def run_epoch(model, loader, device, optimizer, alpha, lambda_data, lambda_pde, 
     n_batches = 0
 
     for coords, target in loader:
-        coords = coords.to(device).float()
-        target = target.to(device).float()
+        coords = coords.to(device=device, dtype=TRAIN_DTYPE)
+        target = target.to(device=device, dtype=TRAIN_DTYPE)
 
         coords = coords.reshape(-1, 4).contiguous()
         target = target.reshape(-1, 1).contiguous()
@@ -97,6 +98,7 @@ def main():
     args = parser.parse_args()
 
     set_seed(args.seed)
+    torch.set_default_dtype(TRAIN_DTYPE)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
@@ -134,7 +136,7 @@ def main():
         hidden_features=args.hidden_features,
         hidden_layers=args.hidden_layers,
         out_features=1,
-    ).to(device)
+    ).to(device=device, dtype=TRAIN_DTYPE)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 

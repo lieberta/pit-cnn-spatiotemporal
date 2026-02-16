@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from .loss import CombinedLoss_dynamic
 from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics
+from train_config import TRAIN_DTYPE
 
 
 class BaseModel_dynamic(nn.Module):
@@ -34,7 +35,7 @@ class BaseModel_dynamic(nn.Module):
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print("Device = " + device)
-        self.to(device)
+        self.to(device=device, dtype=TRAIN_DTYPE)
         
         train_losses = []
         val_losses = []
@@ -54,7 +55,11 @@ class BaseModel_dynamic(nn.Module):
             dataset=val_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
         )
 
-        criterion = CombinedLoss_dynamic(a=a, device=device).to(device)
+        use_physics_loss = (a != 0) #boolean that checks if we use a physics loss at all
+        mse_criterion = nn.MSELoss().to(device=device, dtype=TRAIN_DTYPE)
+        criterion = None
+        if use_physics_loss:
+            criterion = CombinedLoss_dynamic(a=a, device=device).to(device=device, dtype=TRAIN_DTYPE)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
         start_epoch = 0
@@ -70,12 +75,15 @@ class BaseModel_dynamic(nn.Module):
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input_tuple, target) in enumerate(loop):
                 input, t = input_tuple
-                input = input.to(device, dtype=torch.float32)
-                t = t.to(device, dtype=torch.float32)
-                target = target.to(device, dtype=torch.float32)
+                input = input.to(device, dtype=TRAIN_DTYPE)
+                t = t.to(device, dtype=TRAIN_DTYPE)
+                target = target.to(device, dtype=TRAIN_DTYPE)
                 output = self(input, t)
 
-                loss = criterion(input, t, output, target)
+                if use_physics_loss:
+                    loss = criterion(input, t, output, target)
+                else:
+                    loss = mse_criterion(output, target)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -92,11 +100,14 @@ class BaseModel_dynamic(nn.Module):
             with torch.no_grad():
                 for input_tuple, target in val_loader:
                     input, t = input_tuple
-                    input = input.to(device, dtype=torch.float32)
-                    t = t.to(device, dtype=torch.float32)
-                    target = target.to(device, dtype=torch.float32)
+                    input = input.to(device, dtype=TRAIN_DTYPE)
+                    t = t.to(device, dtype=TRAIN_DTYPE)
+                    target = target.to(device, dtype=TRAIN_DTYPE)
                     output = self(input, t)
-                    loss = criterion(input, t, output, target)
+                    if use_physics_loss:
+                        loss = criterion(input, t, output, target)
+                    else:
+                        loss = mse_criterion(output, target)
                     val_loss += loss.item()
 
             avg_val_loss = val_loss / len(val_loader)

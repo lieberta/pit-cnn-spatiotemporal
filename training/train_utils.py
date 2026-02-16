@@ -10,6 +10,18 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
         model.load_state_dict(checkpoint["model_state_dict"])
         if "optimizer_state_dict" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            try:
+                param_dtype = next(model.parameters()).dtype
+            except StopIteration:
+                param_dtype = None
+            for state in optimizer.state.values():
+                for key, value in state.items():
+                    if not torch.is_tensor(value):
+                        continue
+                    if value.is_floating_point() and param_dtype is not None:
+                        state[key] = value.to(device=device, dtype=param_dtype)
+                    else:
+                        state[key] = value.to(device=device)
         start_epoch = checkpoint.get("epoch", -1) + 1
         return start_epoch
     model.load_state_dict(checkpoint)
