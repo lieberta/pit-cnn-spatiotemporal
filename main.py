@@ -288,7 +288,7 @@ if __name__ == '__main__':
     # Shared training parameters
     channels = 16
     lr = 0.001
-    batch = 32 * 8
+    batch = 32 * 4
 
     # Static parameters
     predicted_times = [0.5, 3, 10]

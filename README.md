@@ -46,7 +46,7 @@ python main.py --config configs/pitcnn_dynamic_config.py
 
 - Static models → PICNN_static
 
-- Dynamic models → PECNN_dynamic
+- Dynamic models → PITCNN_dynamic
 
 ## 4. Train with config + `main.py`
 
@@ -75,3 +75,24 @@ python main.py --config configs/pitcnn_timefirst_config.py
 - Dynamic mode runs over `a_list`.
 - Run artifacts are written to `runs/static/...` or `runs/dynamic/...` with a generated `run_id` and `config.json`.
 - For resume training, set the corresponding `resume_run_ids_*` lists in `main.py` (or enable auto-collect flags).
+
+## 5. Model Overview
+
+The project currently supports these model classes (configured via `model_class_name`):
+
+- `PICNN_static`: static model for a fixed prediction horizon (`predicted_time`).
+- `PITCNN_dynamic`: dynamic model with time as an additional input in latent space.
+- `PITCNN_dynamic_timefirst`: dynamic model that injects time earlier in the network.
+- `PITCNN_dynamic_batchnorm` and `PITCNN_dynamic_latenttime1`: additional dynamic variants available in `main.py` registry.
+
+All CNN model classes inherit from shared training base classes (`BaseModel` / `BaseModel_dynamic`).
+
+## 6. Physics Loss (Dynamic)
+
+For dynamic training (`CombinedLoss_dynamic`), the temporal derivative is computed via finite difference between two model predictions:
+
+- `u(t)` from `self(input, t)`
+- `u(t-Δt)` from `self(input, t_past)`
+- derivative: `(u(t) - u(t-Δt)) / (t - t_past)`
+
+This replaces the older coarse approximation based on `(output - input) / t`.

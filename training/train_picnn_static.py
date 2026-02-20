@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .loss import CombinedLoss
-from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics
+from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration
 from configs.train_config import TRAIN_DTYPE
 
 
@@ -130,7 +130,9 @@ class BaseModel(nn.Module):
             epochs_all, train_losses_all, val_losses_all = fallback_loss_history(num_epochs, train_losses, val_losses)
 
         self.save_loss_plot(model_name, epochs_all, train_losses_all, val_losses_all, save_path)
-        self.save_proc_time(model_name, tic, save_path)
+        proc_time = self.save_proc_time(model_name, tic, save_path)
+        config_path = os.path.join(save_path, model_name, "config.json")
+        accumulate_training_duration(config_path, proc_time)
 
     def save_model(self, epoch, model_name, save_path, optimizer):
         model_dir = os.path.join(save_path, model_name)
@@ -179,3 +181,4 @@ class BaseModel(nn.Module):
         formatted_time = time.strftime("%H:%M:%S", time.gmtime(proc_time))
         with open(proc_time_filename, "w") as file:
             file.write(f"Training process duration: {formatted_time}")
+        return proc_time

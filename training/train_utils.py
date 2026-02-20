@@ -1,5 +1,7 @@
 import csv
+import json
 import os
+import time
 
 import torch
 
@@ -63,3 +65,32 @@ def fallback_loss_history(num_epochs, train_losses, val_losses):
     count = min(len(train_losses), len(val_losses))
     epochs = list(range(1, count + 1))
     return epochs, train_losses[:count], val_losses[:count]
+
+
+def accumulate_training_duration(config_path, additional_seconds):
+    if not os.path.exists(config_path):
+        return False
+
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    previous = config.get("training_duration_seconds", 0.0)
+    try:
+        previous = float(previous)
+    except (TypeError, ValueError):
+        previous = 0.0
+
+    total = previous + float(additional_seconds)
+    config["training_duration_seconds"] = total
+    config["training_duration_hms"] = time.strftime("%H:%M:%S", time.gmtime(total))
+
+    try:
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+    except OSError:
+        return False
+
+    return True
