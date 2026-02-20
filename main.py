@@ -17,9 +17,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from torchsummary import summary
 from scripts.list_run_ids import iter_run_configs, matches_filters
-from train_config import TRAIN_DTYPE
+from configs.train_config import TRAIN_DTYPE
 
-TRAIN_DTYPE = torch.float64 # Default training data type, can be overridden by config files.
 
 
 MODEL_CLASS_REGISTRY = {
@@ -239,20 +238,20 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train static/dynamic model from a config file.")
     parser.add_argument(
         "--config",
-        default=os.environ.get("TRAIN_CONFIG", "train_config.py"),
-        help="Path to Python config file (default: $TRAIN_CONFIG or train_config.py).",
+        default=os.environ.get("TRAIN_CONFIG", "configs/pitcnn_dynamic_config.py"),
+        help="Path to Python config file (default: $TRAIN_CONFIG or configs/pitcnn_dynamic_config.py).",
     )
     args = parser.parse_args()
 
     cfg = load_config_module(args.config)
-    required_cfg_fields = ["TRAIN_DTYPE", "epochs", "a_list", "model_class_name", "model_name", "run_comment"]
+    required_cfg_fields = ["epochs", "a_list", "model_class_name", "model_name", "run_comment"]
     missing_cfg_fields = [field for field in required_cfg_fields if not hasattr(cfg, field)]
     if missing_cfg_fields:
         raise ValueError(
             f"Missing required config fields in '{args.config}': {missing_cfg_fields}"
         )
 
-    TRAIN_DTYPE = cfg.TRAIN_DTYPE
+    
     epochs = cfg.epochs
     a_list = cfg.a_list
     model_class_name = cfg.model_class_name

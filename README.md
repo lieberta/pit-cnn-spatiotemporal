@@ -41,9 +41,37 @@ Trained checkpoints saved in ./models/
 Run static or dynamic CNNs with physics-informed loss.
 
 ```bash
-python main.py
+python main.py --config configs/pitcnn_dynamic_config.py
 ```
 
 - Static models → PICNN_static
 
 - Dynamic models → PECNN_dynamic
+
+## 4. Train with config + `main.py`
+
+Training is controlled by Python config files.
+
+### Option A: Central dtype in `configs/train_config.py`
+
+Set only the global dtype there:
+
+- `TRAIN_DTYPE` (e.g. `torch.float32` or `torch.float64`)
+
+`main.py` and the training modules import this dtype directly, independent from the run config file.
+
+### Option B: Use a run config in `configs/`
+
+Use one of these config files for epochs/model class/run naming:
+
+```bash
+python main.py --config configs/picnn_static_config.py
+python main.py --config configs/pitcnn_dynamic_config.py
+python main.py --config configs/pitcnn_timefirst_config.py
+```
+### Notes
+
+- Static mode runs over `predicted_times` and `a_list`.
+- Dynamic mode runs over `a_list`.
+- Run artifacts are written to `runs/static/...` or `runs/dynamic/...` with a generated `run_id` and `config.json`.
+- For resume training, set the corresponding `resume_run_ids_*` lists in `main.py` (or enable auto-collect flags).

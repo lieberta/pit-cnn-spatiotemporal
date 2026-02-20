@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from .loss import CombinedLoss_dynamic
 from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics
-from train_config import TRAIN_DTYPE
+from configs.train_config import TRAIN_DTYPE
 
 
 class BaseModel_dynamic(nn.Module):

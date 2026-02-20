@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, random_split
 
 from dataset import HeatEquationPINNDataset
 from models.pinn import PINN
-from train_config import TRAIN_DTYPE
+from configs.train_config import TRAIN_DTYPE
 
 
 def set_seed(seed):
