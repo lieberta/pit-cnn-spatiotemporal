@@ -14,7 +14,7 @@ class Laplacian3D(nn.Module):
         central_value = -2 * ((1 / (dx ** 2)) + (1 / (dy ** 2)) + (1 / (dz ** 2)))
 
         # Create an empty kernel with zeros
-        kernel = torch.zeros((3, 3, 3), dtype=torch.float32)
+        kernel = torch.zeros((3, 3, 3), dtype=torch.float64)
 
         # Set the central cell
         kernel[1, 1, 1] = central_value
@@ -40,14 +40,14 @@ class HeatSimulation:
                  Nt=10000, device='cpu'):
         self.num_fires = num_fires
         self.device = device
-        self.alpha = torch.tensor(alpha, dtype=torch.float32, device=device)
+        self.alpha = torch.tensor(alpha, dtype=torch.float64, device=device)
         self.Lx, self.Ly, self.Lz = Lx, Ly, Lz
         self.Nx, self.Ny, self.Nz = Nx, Ny, Nz
         self.T, self.Nt = T, Nt
         self.dx, self.dy, self.dz = Lx / (Nx - 1), Ly / (Ny - 1), Lz / (Nz - 1)
         self.dt = T / Nt
 
-        self.u = torch.zeros((Nt + 1, Nx, Ny, Nz), dtype=torch.float32, device=device)
+        self.u = torch.zeros((Nt + 1, Nx, Ny, Nz), dtype=torch.float64, device=device)
         self.laplacian3D = Laplacian3D(self.dx, self.dy, self.dz, device)
 
         self.fireplaces = self.create_fireplace_experiments(self.num_fires)
@@ -74,7 +74,7 @@ class HeatSimulation:
             self.u[0, x_start:x_start + x_size, y_start:y_start + y_size, :2] = 1100.0
 
     def setup_source_term(self):
-        self.source_term = torch.zeros_like(self.u[0], dtype=torch.float32, device=self.device)
+        self.source_term = torch.zeros_like(self.u[0], dtype=torch.float64, device=self.device)
         for fireplace in self.fireplaces:
             x_start, y_start, x_size, y_size = fireplace
             self.source_term[x_start:x_start + x_size, y_start:y_start + y_size, :2] = 100000.0

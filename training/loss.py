@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+
 class Laplacian3DLayer(nn.Module):
     def __init__(self, device):
         super(Laplacian3DLayer, self).__init__()
@@ -92,9 +93,11 @@ class CombinedLoss_dynamic(nn.Module):
         self.mse_loss = nn.MSELoss().to(device)
         self.a = a
 
-    def temporal_derivative(self, input, t, output):
+    def temporal_derivative(self, output, output_past, t, t_past):
+        # expand the tensor with the time value (for a whole batch) to match output dimensions
         t = t.view(t.size(0), t.size(1), 1, 1, 1).expand_as(output)
-        return (output - input) / t
+        t_past = t_past.view(t_past.size(0),t.size(1),1,1,1).expand_as(output_past)
+        return (output - output_past) / (t-t_past)
 
     def create_source_term(self, input_tensor):
         mask = input_tensor > self.fire_threshold
@@ -102,9 +105,26 @@ class CombinedLoss_dynamic(nn.Module):
         source_term[mask] = self.source_intensity
         return source_term
 
-    def forward(self, input, t, output, target):
-        temporal_derivative = self.temporal_derivative(input, t, output)
-        laplacian = self.laplacian_layer(input)
-        source_term = self.create_source_term(input)
-        p_loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
-        return self.mse_loss(output, target) + self.a * p_loss
+    def forward(self, input, output, output_past, t, t_past, target):
+
+            if self.a != 0:
+                # Calculate the temporal derivative
+                temporal_derivative = self.temporal_derivative(output, output_past, t, t_past)
+
+                # Calculate the Laplacian
+                laplacian = self.laplacian_layer(input)
+
+                # Create the source term
+                source_term = self.create_source_term(input)
+
+
+                # Compute the heat equation loss (physics loss)
+                p_loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
+
+                # Return the weighted combination of mse and physics_loss
+                return self.mse_loss(output, target) + self.a * p_loss
+
+            # if a=0 then the system shouldn't calculate physics loss
+            else:
+                # If self.a is 0, only return the MSE loss
+                return self.mse_loss(output, target)

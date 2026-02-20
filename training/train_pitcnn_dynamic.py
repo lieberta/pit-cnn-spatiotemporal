@@ -55,11 +55,7 @@ class BaseModel_dynamic(nn.Module):
             dataset=val_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
         )
 
-        use_physics_loss = (a != 0) #boolean that checks if we use a physics loss at all
-        mse_criterion = nn.MSELoss().to(device=device, dtype=TRAIN_DTYPE)
-        criterion = None
-        if use_physics_loss:
-            criterion = CombinedLoss_dynamic(a=a, device=device).to(device=device, dtype=TRAIN_DTYPE)
+        criterion = CombinedLoss_dynamic(a=a, device=device).to(device=device, dtype=TRAIN_DTYPE)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
         start_epoch = 0
@@ -78,12 +74,12 @@ class BaseModel_dynamic(nn.Module):
                 input = input.to(device, dtype=TRAIN_DTYPE)
                 t = t.to(device, dtype=TRAIN_DTYPE)
                 target = target.to(device, dtype=TRAIN_DTYPE)
-                output = self(input, t)
 
-                if use_physics_loss:
-                    loss = criterion(input, t, output, target)
-                else:
-                    loss = mse_criterion(output, target)
+                delta_t = torch.full_like(t, 0.1, device=device, dtype=TRAIN_DTYPE)
+                t_past = t - delta_t
+                output = self(input, t)
+                output_past = self(input, t_past)
+                loss = criterion(input, output, output_past, t, t_past, target)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -103,11 +99,12 @@ class BaseModel_dynamic(nn.Module):
                     input = input.to(device, dtype=TRAIN_DTYPE)
                     t = t.to(device, dtype=TRAIN_DTYPE)
                     target = target.to(device, dtype=TRAIN_DTYPE)
+
+                    delta_t = torch.full_like(t, 0.1, device=device, dtype=TRAIN_DTYPE)
+                    t_past = t - delta_t
                     output = self(input, t)
-                    if use_physics_loss:
-                        loss = criterion(input, t, output, target)
-                    else:
-                        loss = mse_criterion(output, target)
+                    output_past = self(input, t_past)
+                    loss = criterion(input, output, output_past, t, t_past, target)
                     val_loss += loss.item()
 
             avg_val_loss = val_loss / len(val_loader)

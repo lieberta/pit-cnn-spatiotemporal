@@ -17,8 +17,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from torchsummary import summary
 from scripts.list_run_ids import iter_run_configs, matches_filters
+from train_config import TRAIN_DTYPE
 
-TRAIN_DTYPE = torch.float32 # Default training data type, can be overridden by config files.
+TRAIN_DTYPE = torch.float64 # Default training data type, can be overridden by config files.
 
 
 MODEL_CLASS_REGISTRY = {
@@ -90,13 +91,14 @@ def collect_run_ids(runs_root="./runs", mode="both", a=None, model_name=None, mo
     return run_ids
 
 # Function to train the static model. It sets up the parameters, creates the model and dataset, and trains the model while saving the configuration.
-def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run_id_static, device, seed, comment=None):
-    model_group = "PICNN_static"
-    model_root = os.path.join(runs_root, model_group)
+def static(predicted_time, a, lr, batch, epochs, channels, name, runs_root, resume_run_id_static, device, seed, comment=None):
+    model_root = os.path.join(runs_root, name)
     resume_checkpoint_path = None
     if resume_run_id_static:
         run_dir = find_run_dir_by_id(runs_root, resume_run_id_static)
         model_root = os.path.dirname(run_dir)
+        if name is None:
+            name = os.path.basename(model_root)
         config = load_run_config(run_dir)
         if config:
             lr = config.get("lr", lr)
@@ -104,6 +106,7 @@ def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run
             channels = config.get("channels", channels)
             a = config.get("a", a)
             predicted_time = config.get("predicted_time", predicted_time)
+            name = config.get("name", name)
         resume_checkpoint_path = os.path.join(run_dir, f"{resume_run_id_static}.pth")
 
 
@@ -122,6 +125,7 @@ def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run
             "seed": seed,
             "dataset_version": "unknown",
             "tags": ["static", f"a{a}"],
+            "name": name,
         }
         if comment:
             config["comment"] = comment
@@ -134,6 +138,7 @@ def static(predicted_time, a, lr, batch, epochs, channels, runs_root, resume_run
         "batch": batch,
         "epochs": epochs,
         "channels": channels,
+        "name": name,
     }
     missing = [key for key, value in required.items() if value is None]
     if missing:
@@ -317,12 +322,13 @@ if __name__ == '__main__':
         if resume_run_ids_static:
             for run_id in resume_run_ids_static:
                 static(predicted_time=None, a=None, lr=None, batch=None, epochs=epochs,
-                       channels=None, runs_root=runs_root_static, resume_run_id_static=run_id,
+                       channels=None, name=None, runs_root=runs_root_static, resume_run_id_static=run_id,
                        device=device, seed=seed, comment=run_comment)
         else:
             for a in a_list:
                 for t in predicted_times:
                     static(predicted_time=t, a=a, lr=lr, batch=batch, epochs=epochs, channels=channels,
+                           name=model_name,
                            runs_root=runs_root_static, resume_run_id_static=None,
                            device=device, seed=seed, comment=run_comment)
 

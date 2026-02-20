@@ -13,7 +13,7 @@ class Laplacian3D(nn.Module):
     def __init__(self, dx, dy, dz, device):
         super(Laplacian3D, self).__init__()
         central_value = -2.0 * ((1.0 / (dx ** 2)) + (1.0 / (dy ** 2)) + (1.0 / (dz ** 2)))
-        kernel = torch.zeros((3, 3, 3), dtype=torch.float32)
+        kernel = torch.zeros((3, 3, 3), dtype=torch.float64)
         kernel[1, 1, 1] = central_value
         kernel[1, 1, 0] = kernel[1, 1, 2] = 1.0 / (dz ** 2)
         kernel[1, 0, 1] = kernel[1, 2, 1] = 1.0 / (dy ** 2)
@@ -59,7 +59,7 @@ class HeatSimulationConcrete:
         self.k = float(k)
         self.rho = float(rho)
         self.cp = float(cp)
-        self.alpha = torch.tensor(self.k / (self.rho * self.cp), dtype=torch.float32, device=device)
+        self.alpha = torch.tensor(self.k / (self.rho * self.cp), dtype=torch.float64, device=device)
 
         self.Lx, self.Ly, self.Lz = float(Lx), float(Ly), float(Lz)
         self.Nx, self.Ny, self.Nz = int(Nx), int(Ny), int(Nz)
@@ -73,7 +73,7 @@ class HeatSimulationConcrete:
         self.ignition_temp = float(ignition_temp)
         self.source_power_density = float(source_power_density)
 
-        self.u = torch.full((self.Nt + 1, self.Nx, self.Ny, self.Nz), self.ambient_temp, dtype=torch.float32, device=device)
+        self.u = torch.full((self.Nt + 1, self.Nx, self.Ny, self.Nz), self.ambient_temp, dtype=torch.float64, device=device)
         self.laplacian3d = Laplacian3D(self.dx, self.dy, self.dz, device)
 
         self.fireplaces = self.create_fireplace_experiments(self.num_fires)
@@ -99,7 +99,7 @@ class HeatSimulationConcrete:
 
     def setup_source_term(self):
         # Q [W/m^3] field; later converted via Q/(rho*cp) to K/s in update equation.
-        self.source_q = torch.zeros((self.Nx, self.Ny, self.Nz), dtype=torch.float32, device=self.device)
+        self.source_q = torch.zeros((self.Nx, self.Ny, self.Nz), dtype=torch.float64, device=self.device)
         for x_start, y_start, x_size, y_size in self.fireplaces:
             self.source_q[x_start:x_start + x_size, y_start:y_start + y_size, :2] = self.source_power_density
 
