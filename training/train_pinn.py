@@ -1,7 +1,9 @@
 import argparse
 import csv
+import json
 import os
 import random
+import time
 from datetime import datetime
 
 import numpy as np
@@ -47,12 +49,22 @@ def run_epoch(model, loader, device, optimizer, alpha, lambda_data, lambda_pde, 
     pde_sum = 0.0
     n_batches = 0
 
-    for coords, target in loader:
+    for batch in loader:
+        if len(batch) == 3:
+            coords, target, source = batch
+        else:
+            coords, target = batch
+            source = None
+
         coords = coords.to(device=device, dtype=TRAIN_DTYPE)
         target = target.to(device=device, dtype=TRAIN_DTYPE)
+        if source is not None:
+            source = source.to(device=device, dtype=TRAIN_DTYPE)
 
         coords = coords.reshape(-1, 4).contiguous()
         target = target.reshape(-1, 1).contiguous()
+        if source is not None:
+            source = source.reshape(-1, 1).contiguous()
         coords.requires_grad_(True)
 
         if train:
@@ -60,7 +72,7 @@ def run_epoch(model, loader, device, optimizer, alpha, lambda_data, lambda_pde, 
 
         pred = model(coords)
         data_loss = F.mse_loss(pred, target)
-        pde_residual = model.heat_residual(coords, alpha=alpha, source=None)
+        pde_residual = model.heat_residual(coords, alpha=alpha, source=source)
         pde_loss = torch.mean(pde_residual ** 2)
         loss = lambda_data * data_loss + lambda_pde * pde_loss
 
@@ -87,6 +99,8 @@ def main():
     parser.add_argument("--points-per-sample", type=int, default=8192)
     parser.add_argument("--modulo", type=int, default=1)
     parser.add_argument("--alpha", type=float, default=0.0257)
+    parser.add_argument("--source-threshold-raw", type=float, default=1000.0)
+    parser.add_argument("--source-intensity-raw", type=float, default=100000.0)
     parser.add_argument("--lambda-data", type=float, default=1.0)
     parser.add_argument("--lambda-pde", type=float, default=1.0)
     parser.add_argument("--hidden-features", type=int, default=128)
@@ -96,6 +110,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--runs-root", type=str, default="./runs/pinn")
     args = parser.parse_args()
+    tic = time.perf_counter()
 
     set_seed(args.seed)
     torch.set_default_dtype(TRAIN_DTYPE)
@@ -106,6 +121,8 @@ def main():
         base_path=args.base_path,
         points_per_sample=args.points_per_sample,
         modulo=args.modulo,
+        source_threshold_raw=args.source_threshold_raw,
+        source_intensity_raw=args.source_intensity_raw,
     )
     if len(dataset) == 0:
         raise RuntimeError(f"No normalized experiments found in: {args.base_path}")
@@ -144,6 +161,35 @@ def main():
     run_dir = os.path.join(args.runs_root, run_id)
     os.makedirs(run_dir, exist_ok=True)
     metrics_path = os.path.join(run_dir, "metrics.csv")
+    config_path = os.path.join(run_dir, "config.json")
+    with open(config_path, "w") as f:
+        json.dump(
+            {
+                "run_id": run_id,
+                "model_class": "PINN",
+                "name": "PINN",
+                "base_path": args.base_path,
+                "epochs": args.epochs,
+                "batch": args.batch_size,
+                "lr": args.lr,
+                "points_per_sample": args.points_per_sample,
+                "modulo": args.modulo,
+                "alpha": args.alpha,
+                "lambda_data": args.lambda_data,
+                "lambda_pde": args.lambda_pde,
+                "hidden_features": args.hidden_features,
+                "hidden_layers": args.hidden_layers,
+                "val_split": args.val_split,
+                "num_workers": args.num_workers,
+                "seed": args.seed,
+                "runs_root": args.runs_root,
+                "source_threshold_raw": args.source_threshold_raw,
+                "source_intensity_raw": args.source_intensity_raw,
+                "training_dtype": str(TRAIN_DTYPE),
+            },
+            f,
+            indent=2,
+        )
 
     best_val = float("inf")
     for epoch in range(1, args.epochs + 1):
@@ -184,6 +230,17 @@ def main():
             f"train(total={train_total:.6f}, data={train_data:.6f}, pde={train_pde:.6f}) "
             f"val(total={val_total:.6f}, data={val_data:.6f}, pde={val_pde:.6f})"
         )
+
+    proc_time = float(time.perf_counter() - tic)
+    with open(os.path.join(run_dir, f"proc_time_{run_id}.txt"), "w") as f:
+        f.write(f"Training process duration: {time.strftime('%H:%M:%S', time.gmtime(proc_time))}")
+
+    with open(config_path, "r") as f:
+        cfg = json.load(f)
+    cfg["training_duration_seconds"] = proc_time
+    cfg["training_duration_hms"] = time.strftime("%H:%M:%S", time.gmtime(proc_time))
+    with open(config_path, "w") as f:
+        json.dump(cfg, f, indent=2)
 
     print(f"Done. Run dir: {run_dir}")
 

@@ -4,5 +4,5 @@ import torch
 epochs = 10
 a_list = [1]
 model_class_name = "PITCNN_dynamic"
-model_name = model_class_name + "_f32_normsource_propertimederivative"
-run_comment = "proper time derivative and normalized source term + f32"
+model_name = model_class_name + "_f64_OLDSOURCE_propertimederivative"
+run_comment = "proper time derivative and OLDSOURCE + f32"

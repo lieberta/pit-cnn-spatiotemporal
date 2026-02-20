@@ -2,6 +2,6 @@ data
 plots
 runs
 logs
-LOCAL_COMMANDS.md
+ignore
 __pycache__/
 *.pyc

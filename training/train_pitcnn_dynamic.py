@@ -65,7 +65,11 @@ class BaseModel_dynamic(nn.Module):
 
         for epoch in range(start_epoch, num_epochs):
             train_loss = 0.0
+            train_mse = 0.0
+            train_physics = 0.0
             val_loss = 0.0
+            val_mse = 0.0
+            val_physics = 0.0
 
             self.train()
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
@@ -78,13 +82,19 @@ class BaseModel_dynamic(nn.Module):
                 delta_t = torch.full_like(t, 0.1, device=device, dtype=TRAIN_DTYPE)
                 t_past = t - delta_t
                 output = self(input, t)
+                
                 output_past = self(input, t_past)
-                loss = criterion(input, output, output_past, t, t_past, target)
+
+                loss, mse_loss, physics_loss = criterion.compute_components(
+                    input, output, output_past, t, t_past, target
+                )
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item()
+                train_mse += mse_loss.item()
+                train_physics += physics_loss.item()
 
                 loop.set_description(f"Epoch [{epoch}/{num_epochs}]")
                 loop.set_postfix(trainloss=train_loss / (i + 1))
@@ -104,16 +114,34 @@ class BaseModel_dynamic(nn.Module):
                     t_past = t - delta_t
                     output = self(input, t)
                     output_past = self(input, t_past)
-                    loss = criterion(input, output, output_past, t, t_past, target)
+                    loss, mse_loss, physics_loss = criterion.compute_components(
+                        input, output, output_past, t, t_past, target
+                    )
                     val_loss += loss.item()
+                    val_mse += mse_loss.item()
+                    val_physics += physics_loss.item()
 
             avg_val_loss = val_loss / len(val_loader)
             val_losses.append(avg_val_loss)
+            avg_train_mse = train_mse / len(train_loader)
+            avg_train_physics = train_physics / len(train_loader)
+            avg_val_mse = val_mse / len(val_loader)
+            avg_val_physics = val_physics / len(val_loader)
 
             model_dir = os.path.join(save_path, model_name)
             os.makedirs(model_dir, exist_ok=True)
             metrics_path = os.path.join(model_dir, "metrics.csv")
+            components_path = os.path.join(model_dir, "loss_components.csv")
             header = ["run_id", "epoch", "train_loss", "val_loss", "lr", "a", "channels", "batch", "seed"]
+            components_header = [
+                "run_id",
+                "epoch",
+                "train_mse_loss",
+                "train_physics_loss",
+                "val_mse_loss",
+                "val_physics_loss",
+                "a",
+            ]
             row = {
                 "run_id": run_id or model_name,
                 "epoch": epoch + 1,
@@ -125,7 +153,17 @@ class BaseModel_dynamic(nn.Module):
                 "batch": batch_size,
                 "seed": seed,
             }
+            components_row = {
+                "run_id": run_id or model_name,
+                "epoch": epoch + 1,
+                "train_mse_loss": avg_train_mse,
+                "train_physics_loss": avg_train_physics,
+                "val_mse_loss": avg_val_mse,
+                "val_physics_loss": avg_val_physics,
+                "a": a,
+            }
             append_metrics_row(metrics_path, header, row)
+            append_metrics_row(components_path, components_header, components_row)
             self.save_model(epoch, model_name, save_path, optimizer)
 
         metrics_path = os.path.join(save_path, model_name, "metrics.csv")

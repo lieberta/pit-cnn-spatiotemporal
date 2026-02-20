@@ -88,8 +88,8 @@ class CombinedLoss_dynamic(nn.Module):
         # fire_threshold_norm = (1000.0 - 20.0) / 27353.34765625 = 0.035828
         #
         # This is a normalization correction because the loss is computed in normalized space.
-        self.source_intensity = source_intensity / 27353.34765625
-        self.fire_threshold = (1000.0 - 20.0) / 27353.34765625
+        self.source_intensity = source_intensity
+        self.fire_threshold = 1000.0 
         self.mse_loss = nn.MSELoss().to(device)
         self.a = a
 
@@ -105,26 +105,18 @@ class CombinedLoss_dynamic(nn.Module):
         source_term[mask] = self.source_intensity
         return source_term
 
+    def compute_components(self, input, output, output_past, t, t_past, target):
+        mse = self.mse_loss(output, target)
+        if self.a == 0:
+            physics = torch.zeros((), dtype=output.dtype, device=output.device)
+        else:
+            temporal_derivative = self.temporal_derivative(output, output_past, t, t_past)
+            laplacian = self.laplacian_layer(input)
+            source_term = self.create_source_term(input)
+            physics = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
+        total = mse + self.a * physics
+        return total, mse, physics
+
     def forward(self, input, output, output_past, t, t_past, target):
-
-            if self.a != 0:
-                # Calculate the temporal derivative
-                temporal_derivative = self.temporal_derivative(output, output_past, t, t_past)
-
-                # Calculate the Laplacian
-                laplacian = self.laplacian_layer(input)
-
-                # Create the source term
-                source_term = self.create_source_term(input)
-
-
-                # Compute the heat equation loss (physics loss)
-                p_loss = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
-
-                # Return the weighted combination of mse and physics_loss
-                return self.mse_loss(output, target) + self.a * p_loss
-
-            # if a=0 then the system shouldn't calculate physics loss
-            else:
-                # If self.a is 0, only return the MSE loss
-                return self.mse_loss(output, target)
+        total, _, _ = self.compute_components(input, output, output_past, t, t_past, target)
+        return total

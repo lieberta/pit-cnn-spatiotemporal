@@ -28,7 +28,7 @@ SAVE_EVERY="${SAVE_EVERY:-100}"
 NORMALIZE="${NORMALIZE:-1}"   # 1 => --normalize, 0 => skip
 
 CMD=(
-  python simulation/generate_testset_timed.py
+  python -m simulation.generate_testset_timed
   --out-root "$OUT_ROOT"
   --fires-min "$FIRES_MIN"
   --fires-max "$FIRES_MAX"

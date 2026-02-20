@@ -1,67 +1,98 @@
-import os
-import numpy as np
+import argparse
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 
-
-
-# Function to create a subfolder if it doesn't exist
-def create_subfolder(folder_path, subfolder_name):
-    subfolder_path = os.path.join(folder_path, subfolder_name)
-    os.makedirs(subfolder_path, exist_ok=True)
+def create_subfolder(folder_path: Path, subfolder_name: str):
+    subfolder_path = folder_path / subfolder_name
+    subfolder_path.mkdir(parents=True, exist_ok=True)
     return subfolder_path
 
-# Load the .npz file
-#experiment_number = 0  # Replace with the experiment number you want to plot
-experiment_folder = f'./data/testset/experiment_1_20240229_125217'
 
-
-
-npz_file_path = f'{experiment_folder}/heat_equation_solution.npz'
-
-# Check if the .npz file exists
-if not os.path.exists(npz_file_path):
-    print(f'Error: The .npz file for experiment {experiment_number} does not exist.')
-else:
-    # Load data from the .npz file
-    data = np.load(npz_file_path)
-    time = data['time']
-    x = data['x']
-    y = data['y']
-    z = data['z']
-    temperature = data['temperature']
-
-    # Find global minimum and maximum temperature values for chosing colors
-    global_min_temp = np.min(temperature)
-    global_max_temp = 500#np.max(temperature)
-
-    # Search for the fire source y coordinate
-    # Iterate through [x, y, 0] coordinates
+def find_fire_slice_y(temp_t0):
     found_fire = False
-    for x_coord in range(x.shape[0]):
-        for y_coord in range(y.shape[0]):
-            # Check if temperature at [x, y, 0] is greater than 500
-            if temperature[0, x_coord, y_coord, 0] > 21: # here we check the y coordinate that indicates the firesource, since we chose the starting conditions at the fire source to be 22. degrees
-                y_fire = y_coord  # Save the y coordinate
+    y_fire = 0
+    for x_coord in range(temp_t0.shape[0]):
+        for y_coord in range(temp_t0.shape[1]):
+            if temp_t0[x_coord, y_coord, 0] > 21:
+                y_fire = y_coord
                 found_fire = True
-                break  # This breaks out of the inner loop
+                break
         if found_fire:
-            break  # This breaks out of the outer loop
+            break
+    return y_fire
 
 
-    # Create a subfolder for saving plots
-    plots_folder = create_subfolder(experiment_folder, 'plots')
+def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, vmax_clip: float):
+    npz_file_path = experiment_folder / npz_name
+    if not npz_file_path.exists():
+        print(f"[skip] missing file: {npz_file_path}")
+        return
 
-    # Plot and save the x-z slice for each timestep
-    for timestep in range(data['temperature'].shape[0]):
-        if timestep % 10 == 0:  # Check if the timestep is a multiple of 10
-            plt.figure()
-            plt.imshow(temperature[timestep, :, y_fire, :].T, cmap='hot', extent=(0, 64, 0, 16), origin='lower', vmin=global_min_temp, vmax=global_max_temp) #this is for stable experiments
-            plt.colorbar(label='Temperature (°C)')
-            plt.title(f'Timestep {time[timestep*100]}s') # times 100 because only every 100th timestep has been saved
-            plt.xlabel('X')
-            plt.ylabel('Z')
-            plt.savefig(f'{plots_folder}/timestep_{timestep}.png')
-            plt.close()
+    data = np.load(npz_file_path)
+    time_axis = data["time"] if "time" in data.files else np.arange(data["temperature"].shape[0], dtype=np.float64)
+    temperature = data["temperature"]
 
-    print('Plots have been saved in the "plots" subfolder.')
+    global_min_temp = float(np.min(temperature))
+    global_max_temp = float(np.max(temperature)) if vmax_clip <= 0 else min(float(np.max(temperature)), vmax_clip)
+
+    y_fire = find_fire_slice_y(temperature[0])
+    plots_folder = create_subfolder(experiment_folder, "plots")
+
+    for timestep in range(temperature.shape[0]):
+        if timestep % max(1, step_every) != 0:
+            continue
+
+        plt.figure()
+        plt.imshow(
+            temperature[timestep, :, y_fire, :].T,
+            cmap="hot",
+            extent=(0, temperature.shape[1], 0, temperature.shape[3]),
+            origin="lower",
+            vmin=global_min_temp,
+            vmax=global_max_temp,
+        )
+        plt.colorbar(label="Temperature")
+        t_val = time_axis[timestep] if timestep < len(time_axis) else float(timestep)
+        plt.title(f"{experiment_folder.name} | timestep {timestep} | t={t_val:.3f}")
+        plt.xlabel("X")
+        plt.ylabel("Z")
+        plt.savefig(plots_folder / f"timestep_{timestep:05d}.png")
+        plt.close()
+
+    print(f"[done] plots saved in {plots_folder}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot x-z room slices for one or all experiments.")
+    parser.add_argument("--base-path", default="./data/testset_20s")
+    parser.add_argument("--experiment", default=None, help="optional exact experiment folder name")
+    parser.add_argument("--normalized", action="store_true", help="use normalized npz instead of raw")
+    parser.add_argument("--step-every", type=int, default=10, help="render every n-th stored timestep")
+    parser.add_argument("--vmax-clip", type=float, default=500.0, help="<=0 disables clip")
+    args = parser.parse_args()
+
+    base = Path(args.base_path)
+    npz_name = "normalized_heat_equation_solution.npz" if args.normalized else "heat_equation_solution.npz"
+
+    if args.experiment:
+        experiment_dirs = [base / args.experiment]
+    else:
+        experiment_dirs = sorted([p for p in base.iterdir() if p.is_dir() and p.name.startswith("experiment")])
+
+    if not experiment_dirs:
+        raise RuntimeError(f"No experiment_* folders found in {base}")
+
+    for exp in experiment_dirs:
+        if not exp.exists():
+            print(f"[skip] experiment not found: {exp}")
+            continue
+        render_experiment(exp, npz_name=npz_name, step_every=args.step_every, vmax_clip=args.vmax_clip)
+
+
+if __name__ == "__main__":
+    main()

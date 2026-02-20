@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import os
+import json
 from configs.train_config import TRAIN_DTYPE
 
 NP_DTYPE = np.float64 if TRAIN_DTYPE == torch.float64 else np.float32
@@ -57,9 +58,35 @@ class HeatEquationPINNDataset(Dataset):
     Returns random collocation points and supervised temperatures from one experiment.
     """
 
-    def __init__(self, base_path='./data/laplace_convolution/', points_per_sample=8192, modulo=1):
+    def __init__(
+        self,
+        base_path='./data/laplace_convolution/',
+        points_per_sample=8192,
+        modulo=1,
+        source_threshold_raw=1000.0,
+        source_intensity_raw=100000.0,
+    ):
         self.points_per_sample = int(points_per_sample)
         self.files = []
+        self.source_threshold_raw = float(source_threshold_raw)
+        self.source_intensity_raw = float(source_intensity_raw)
+
+        norm_path = os.path.join(base_path, "normalization_values.json")
+        if os.path.exists(norm_path):
+            with open(norm_path, "r") as f:
+                norm = json.load(f)
+            min_temp = float(norm["min_temp"])
+            max_temp = float(norm["max_temp"])
+        else:
+            # Fallback to known dataset defaults if normalization metadata is missing.
+            min_temp = 20.0
+            max_temp = 27373.34765625
+
+        temp_range = max_temp - min_temp
+        if temp_range <= 0:
+            raise ValueError(f"Invalid normalization range in '{norm_path}': min={min_temp}, max={max_temp}")
+        self.source_threshold_norm = (self.source_threshold_raw - min_temp) / temp_range
+        self.source_intensity_norm = self.source_intensity_raw / temp_range
 
         folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if
                    os.path.isdir(os.path.join(base_path, f)) and f.startswith('experiment')]
@@ -92,10 +119,13 @@ class HeatEquationPINNDataset(Dataset):
 
         coords = np.stack([x, y, z, t], axis=1).astype(NP_DTYPE)  # (n, 4)
         target = data[t_idx, x_idx, y_idx, z_idx].astype(NP_DTYPE).reshape(-1, 1)  # (n, 1)
+        source_mask = data[0, x_idx, y_idx, z_idx] > self.source_threshold_norm
+        source = np.where(source_mask, self.source_intensity_norm, 0.0).astype(NP_DTYPE).reshape(-1, 1)
 
         coords_tensor = torch.from_numpy(coords)
         target_tensor = torch.from_numpy(target)
-        return coords_tensor, target_tensor
+        source_tensor = torch.from_numpy(source)
+        return coords_tensor, target_tensor, source_tensor
 
 # 
 class HeatEquationMultiDataset_dynamic(Dataset):
