@@ -6,6 +6,9 @@ import json
 from configs.train_config import TRAIN_DTYPE
 
 NP_DTYPE = np.float64 if TRAIN_DTYPE == torch.float64 else np.float32
+SIM_TOTAL_SECONDS = 10.0
+SIM_STEPS_PER_SECOND = 1000.0
+SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND
 
 
 def list_experiment_folders(base_path):
@@ -34,7 +37,8 @@ class HeatEquationMultiDataset(Dataset):
 
                 inputs = torch.tensor(data[0, :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0).unsqueeze(1)
 
-                targets = torch.tensor(data[int(predicted_time*10), :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0).unsqueeze(1) # predicted second*10 since 10 timesteps in the data equals 1 second
+                target_idx = int(predicted_time * SIM_STEPS_PER_SECOND)
+                targets = torch.tensor(data[target_idx, :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0).unsqueeze(1)
 
                 self.inputs.append(inputs)
                 self.targets.append(targets)
@@ -129,7 +133,7 @@ class HeatEquationPINNDataset(Dataset):
 
 # 
 class HeatEquationMultiDataset_dynamic(Dataset):
-    def __init__(self, modulo=10, base_path='./data/laplace_convolution/'):
+    def __init__(self, modulo=1, base_path='./data/new_detailed_heat_sim/'):
         # Create list of folders
         self.files = []
         self.data_cache = {}            # new with cache
@@ -138,7 +142,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         i=0 # count variable
         # Collect file paths and time steps
         for folder in folders:
-            if i%modulo==0: # take only every tenth folder
+            if i%modulo==0: # take only modulo-th folder
                 npz_file_path = os.path.join(folder, 'normalized_heat_equation_solution.npz')
                 if os.path.exists(npz_file_path):
                     data = np.load(npz_file_path)['temperature']
@@ -159,22 +163,32 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         data = self.data_cache[npz_file_path] # new with cache, old: data = np.load(npz_file_path)['temperature']
         input_tensor = torch.tensor(data[0, :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0)
         target_tensor = torch.tensor(data[predicted_time, :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0)
-        predicted_time_tensor = torch.tensor([predicted_time * 0.1], dtype=TRAIN_DTYPE)  # Convert predicted time to tensor
+        predicted_time_tensor = torch.tensor([predicted_time * SECONDS_PER_STEP], dtype=TRAIN_DTYPE)
         return (input_tensor, predicted_time_tensor), target_tensor
 
 
 if __name__ == '__main__':
 
-    dataset = HeatEquationMultiDataset_dynamic(base_path=f'data/testset')
+    # dataset = HeatEquationMultiDataset_dynamic(base_path=f'data/new_detailed_heat_sim/')
+    base_path = f'./data/new_detailed_heat_sim/'
+    folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if
+                    os.path.isdir(os.path.join(base_path, f)) and f.startswith('experiment')]
+    i=0 # count variable
+    # Collect file paths and time steps
+    for folder in folders:
+        npz_file_path = os.path.join(folder, 'normalized_heat_equation_solution.npz')
+        if os.path.exists(npz_file_path):
+            data = np.load(npz_file_path)['temperature']
+            num_timesteps = data.shape[0]
+            print("num_timesteps:", num_timesteps)
+            break
 
-    for x,y in dataset:
-        print(f'{x[0].shape} \n {x[1].shape} \n {y.shape}')
-        break
+
 
     # Now, to get the shape of the inputs and targets, you can do:
     #input_shape = dataset.inputs.shape
     #target_shape = dataset.targets.shape
 
-    print("Inputs shape:", len(dataset))
+    #print("Inputs shape:", len(dataset))
 
     #print("Targets shape:", target_shape)

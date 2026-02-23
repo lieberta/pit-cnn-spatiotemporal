@@ -128,7 +128,7 @@ class HeatSimulation:
 
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")  # Format: YYYYMMDD_HHMMSS
         #experiment_folder = f'./data/laplace_convolution/experiment_{self.num_fires}_{current_time}'
-        experiment_folder = f'./data/testset/experiment_{self.num_fires}_{current_time}'
+        experiment_folder = f'./data/laplace1000/experiment_{self.num_fires}_{current_time}'
         os.makedirs(experiment_folder, exist_ok=True)
         np.savez(f'{experiment_folder}/heat_equation_solution.npz', time=np.linspace(0, self.T, self.Nt + 1),
                  x=np.linspace(0, self.Lx, self.Nx), y=np.linspace(0, self.Ly, self.Ny),

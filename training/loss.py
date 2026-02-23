@@ -50,7 +50,7 @@ class HeatEquationLoss(nn.Module):
 
     def forward(self, model_output, current_input):
         temporal_derivative = self.temporal_derivative(model_output, current_input)
-        laplacian = self.laplacian_layer(current_input)
+        laplacian = self.laplacian_layer(model_output)
         source_term = self.create_source_term(current_input)
         return torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
 
@@ -68,28 +68,24 @@ class CombinedLoss(nn.Module):
 
 
 class CombinedLoss_dynamic(nn.Module):
-    def __init__(self, a, device, alpha=0.0257, source_intensity=100000.0):
+    def __init__(
+        self,
+        a,
+        device,
+        alpha=0.0257,
+        source_intensity=100000.0,
+        source_threshold=500.0,
+        min_temp=20.0,
+        max_temp=27373.34765625,
+    ):
         super(CombinedLoss_dynamic, self).__init__()
         self.alpha = alpha
         self.laplacian_layer = Laplacian3DLayer(device)
-        # Normalization-aware source term:
-        # Data is normalized as u_norm = (u - min_temp) / (max_temp - min_temp),
-        # so the source term must be scaled by the same range R.
-        #
-        # For data/testset/normalization_values.json:
-        # max_temp = 27373.34765625
-        # min_temp = 20.0
-        # R = max_temp - min_temp = 27353.34765625
-        #
-        # raw source_intensity = 100000.0
-        # source_intensity_norm = 100000.0 / 27353.34765625 = 3.65585
-        #
-        # old fire threshold (raw): 1000.0
-        # fire_threshold_norm = (1000.0 - 20.0) / 27353.34765625 = 0.035828
-        #
-        # This is a normalization correction because the loss is computed in normalized space.
-        self.source_intensity = source_intensity
-        self.fire_threshold = 1000.0 
+        temp_range = max_temp - min_temp
+        if temp_range <= 0:
+            raise ValueError(f"Invalid normalization range: min_temp={min_temp}, max_temp={max_temp}")
+        self.source_intensity = source_intensity / temp_range
+        self.fire_threshold = (source_threshold - min_temp) / temp_range
         self.mse_loss = nn.MSELoss().to(device)
         self.a = a
 
@@ -111,7 +107,7 @@ class CombinedLoss_dynamic(nn.Module):
             physics = torch.zeros((), dtype=output.dtype, device=output.device)
         else:
             temporal_derivative = self.temporal_derivative(output, output_past, t, t_past)
-            laplacian = self.laplacian_layer(input)
+            laplacian = self.laplacian_layer(output)
             source_term = self.create_source_term(input)
             physics = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
         total = mse + self.a * physics

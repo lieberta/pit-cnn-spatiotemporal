@@ -5,7 +5,7 @@ import importlib.util
 from models.picnn_static import PICNN_static
 from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
 from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
-from dataset import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
+from data import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
 import torch
 from training.loss import CombinedLoss
 import os
@@ -223,9 +223,10 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
             f"For resume runs, ensure config.json exists in '{model_dir}' with these fields."
         )
 
-    print(f'Create Dataset HeatEquationMultiDatset_dynamic')
+    data_path= './data/new_detailed_heat_sim_f64/'
+    print(f'Create Dataset HeatEquationMultiDatset_dynamic from {data_path}...')
     # this is for version 2 training package:
-    dataset = HeatEquationMultiDataset_dynamic()
+    dataset = HeatEquationMultiDataset_dynamic(base_path=data_path)
     model = model_class(c=channels).to(device=device, dtype=TRAIN_DTYPE)
     print(f'Train Model:')
     model.train_model(a=a, dataset=dataset, num_epochs=epochs, batch_size=batch,

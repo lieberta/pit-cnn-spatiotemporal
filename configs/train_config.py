@@ -1,3 +1,3 @@
 import torch
 
-TRAIN_DTYPE = torch.float64
+TRAIN_DTYPE = torch.float32

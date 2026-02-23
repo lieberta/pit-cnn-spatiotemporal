@@ -12,6 +12,10 @@ from .loss import CombinedLoss_dynamic
 from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration
 from configs.train_config import TRAIN_DTYPE
 
+SIM_TOTAL_SECONDS = 10.0
+SIM_STEPS_PER_SECOND = 1000.0
+SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND
+
 
 class BaseModel_dynamic(nn.Module):
     def __init__(self):
@@ -55,7 +59,14 @@ class BaseModel_dynamic(nn.Module):
             dataset=val_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
         )
 
-        criterion = CombinedLoss_dynamic(a=a, device=device).to(device=device, dtype=TRAIN_DTYPE)
+        min_temp = getattr(dataset, "min_temp", 20.0)
+        max_temp = getattr(dataset, "max_temp", 27373.34765625)
+        criterion = CombinedLoss_dynamic(
+            a=a,
+            device=device,
+            min_temp=min_temp,
+            max_temp=max_temp,
+        ).to(device=device, dtype=TRAIN_DTYPE)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
         start_epoch = 0
@@ -79,7 +90,7 @@ class BaseModel_dynamic(nn.Module):
                 t = t.to(device, dtype=TRAIN_DTYPE)
                 target = target.to(device, dtype=TRAIN_DTYPE)
 
-                delta_t = torch.full_like(t, 0.1, device=device, dtype=TRAIN_DTYPE)
+                delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=TRAIN_DTYPE)
                 t_past = t - delta_t
                 output = self(input, t)
                 
@@ -110,7 +121,7 @@ class BaseModel_dynamic(nn.Module):
                     t = t.to(device, dtype=TRAIN_DTYPE)
                     target = target.to(device, dtype=TRAIN_DTYPE)
 
-                    delta_t = torch.full_like(t, 0.1, device=device, dtype=TRAIN_DTYPE)
+                    delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=TRAIN_DTYPE)
                     t_past = t - delta_t
                     output = self(input, t)
                     output_past = self(input, t_past)
