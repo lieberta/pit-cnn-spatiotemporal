@@ -96,3 +96,25 @@ For dynamic training (`CombinedLoss_dynamic`), the temporal derivative is comput
 - derivative: `(u(t) - u(t-Δt)) / (t - t_past)`
 
 This replaces the older coarse approximation based on `(output - input) / t`.
+
+### V0.2 Physics Alignment Update (2026-02-26)
+
+Recent fixes aligned dynamic training more closely with the simulation PDE:
+
+- Interior-only PDE residual:
+  - Physics residual is now computed only on interior voxels (`1:-1` in x/y/z).
+  - Boundary voxels are excluded because boundaries are Dirichlet-constrained.
+- Laplacian kernel scaling:
+  - Dynamic physics Laplacian now uses the same finite-difference scaling as simulation (`1/dx^2`, `1/dy^2`, `1/dz^2`).
+  - Grid spacing is computed from simulation geometry defaults (`Lx=6.3, Ly=3.1, Lz=1.5, Nx=64, Ny=32, Nz=16`).
+- Boundary assignment bug fix in dynamic models:
+  - In `models/pitcnn_latenttime.py`, z=0 boundary assignment was corrected from a scalar broadcast to full-plane copy:
+    - from `x_input[0,0,-1,-1,-1]`
+    - to `x_input[:, :, :, :, 0]`
+  - Applied in both `PITCNN_dynamic` and `PITCNN_dynamic_latenttime1`.
+
+### Current Known Limitation
+
+- Simulation source is defined on `:2` in z while `z=0` is also Dirichlet-clamped to ambient each step.
+- This means a source/boundary overlap exists in generated data (partially overwritten by boundary enforcement).
+- Interior-only residual reduces this mismatch during training, but it is still a data-generation consistency caveat.

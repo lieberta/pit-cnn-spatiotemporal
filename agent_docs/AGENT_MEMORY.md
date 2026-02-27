@@ -1,6 +1,6 @@
 # Agent Memory
 
-Last updated: 2026-02-20
+Last updated: 2026-02-26
 
 ## Project Snapshot
 - Repository trains CNN/PINN surrogates for 3D transient heat-transfer data.
@@ -48,11 +48,16 @@ Last updated: 2026-02-20
 - `CombinedLoss_dynamic` temporal derivative now uses finite difference between two model outputs:
   - `u(t)` and `u(t_past)`
   - derivative `(u(t) - u(t_past)) / (t - t_past)`
-- Dynamic trainer currently sets `t_past = t - 0.1` and computes `output_past = self(input, t_past)` in both train and val loops.
+- Dynamic trainer currently sets `t_past = t - 0.001` (1 simulation step) and computes `output_past = self(input, t_past)` in both train and val loops.
 - Source term in `CombinedLoss_dynamic` remains normalization-aware:
   - `source_intensity / 27353.34765625`
-  - fire threshold `(1000.0 - 20.0) / 27353.34765625`
-- Laplacian is implemented as fixed 3D conv kernel and cast to input dtype/device in forward.
+  - fire threshold uses `source_threshold=500.0` (normalized with dataset min/max)
+- Dynamic physics residual is now enforced only on interior cells (`[:, :, 1:-1, 1:-1, 1:-1]`).
+- Laplacian in `Laplacian3DLayer` is now scaled like the simulation stencil:
+  - center `-2*(1/dx^2 + 1/dy^2 + 1/dz^2)`
+  - 6-neighbor weights `1/dx^2`, `1/dy^2`, `1/dz^2`
+  - defaults use simulation geometry (`Lx=6.3, Ly=3.1, Lz=1.5, Nx=64, Ny=32, Nz=16`)
+- Physics residual now uses `laplacian(output_past)` (explicit-Euler aligned with simulator step).
 
 ## Checkpointing and Metrics
 - Utilities: `training/train_utils.py`.
@@ -73,8 +78,63 @@ Last updated: 2026-02-20
 - SLURM default in `slurm/main.slurm` matches the same config path fallback.
 
 ## Docs Status
-- `README.md` contains current workflow, config usage, model overview, and dynamic physics-loss notes.
+- `README.md` contains current workflow, config usage, model overview, dynamic physics-loss notes, and the V0.2 physics-alignment update details.
 - Legacy `readme.txt` has been removed after migration of relevant content.
+
+## Model Boundary Notes
+- `models/pitcnn_latenttime.py` had a z=0 boundary assignment bug where a single scalar was broadcast to the full plane.
+- Fixed in both `PITCNN_dynamic` and `PITCNN_dynamic_latenttime1` by copying full z=0 plane from input.
+- Remaining mismatch: model still copies boundaries from `u0`, while simulator enforces constant Dirichlet ambient each timestep.
+
+## Config/Run Notes (2026-02-26)
+- `configs/pitcnn_dynamic_config.py` and `configs/pitcnn_timefirst_config.py` were aligned to V0.2 defaults:
+  - `epochs = 10`
+  - `model_name = model_class_name + "_f32_V0.2"`
+  - `resume_run_ids_dynamic = []`
+  - updated run comments reflecting physics/laplacian/boundary fixes
+- `configs/pitcnn_dynamic_config.py` now uses V0.3 naming/comment and `a_list = [0.1, 1]`.
+- Dynamic run directories were archived under `runs/dynamic/pre-normsource-incident/` except `runs/dynamic/PITCNN_dynamic_f32_a=0`.
+
+## Simulation/Data Notes (2026-02-26)
+- Simulation file for current dataset generation: `simulation/new_heat_sim_class.py` (not `new_sim_class.py`).
+- Source placement was adjusted to avoid boundaries:
+  - fireplaces keep one-cell distance to x/y boundaries
+  - initial hot zone and source term moved from `:2` to interior `z=1:3`
+- PDE scheme in simulator: explicit Euler FD
+  - `u[n+1] = u[n] + alpha*dt*laplacian(u[n]) + dt*source`
+  - Dirichlet boundaries are set after each step.
+
+## Debug Findings (a=0 vs a=1)
+- `loss_components.csv` columns used in both runs:
+  - `run_id, epoch, train_mse_loss, train_physics_loss, val_mse_loss, val_physics_loss, a`
+- `total_loss` is not logged in `loss_components.csv`; it is in `metrics.csv` as:
+  - `total = mse + a * physics`
+- Observed scale snapshot from inspected runs:
+  - data-only (`a=0`, 50 epochs): train/val MSE reaches around `1e-7 ... 1e-5`; physics is hard-zero by construction.
+  - physics (`a=1`, 10 epochs): train/val MSE roughly `1e-4 ... 1e-3`, physics term roughly `1e-5 ... 1e-2`.
+- Interpretation used for debugging:
+  - smaller `a=0` numbers are not contradictory, because only one objective is optimized.
+  - MSE and PDE residual are not naturally unit-comparable; direct magnitude comparison can be misleading.
+  - the compared runs were not strictly apples-to-apples (`epochs`, seed, and code state differed).
+
+## Physics Alignment Checklist (2026-02-26)
+- Simulator (`simulation/new_heat_sim_class.py`) currently uses:
+  - explicit Euler: `u[n+1] = u[n] + alpha*dt*laplacian(u[n]) + dt*source`
+  - geometry/time: `Nx,Ny,Nz=64,32,16`, `Lx,Ly,Lz=6.3,3.1,1.5`, so `dx=dy=dz=0.1`, `dt=0.001`.
+  - constant Dirichlet boundaries set every step on all six faces.
+- Physics loss (`training/loss.py`) currently uses:
+  - temporal derivative from two forward passes: `(u(t)-u(t-dt))/dt`
+  - Laplacian evaluated at past state: `laplacian(output_past)` (explicit-Euler aligned)
+  - residual only on interior voxels `1:-1` in x/y/z.
+- Remaining known mismatch:
+  - model forward (`models/pitcnn_latenttime.py`) still clamps boundaries to `u0` values, while simulator enforces constant ambient boundaries each timestep.
+
+## Visualization Notes (2026-02-26)
+- Visualization script renamed:
+  - from `evaluation.visualize_testset_3d`
+  - to `evaluation.visualize_heatvid_3d`
+- Added zarr support and robust time-axis handling (`--assume-dt`) for datasets with index-like time arrays.
+- Added fixed visualization controls (`--viz-vmin`, `--viz-vmax`, `--viz-gamma`, `--cmap`) and collision-safe video naming.
 
 ## Pitfalls to Remember
 - Keep dtype aligned end-to-end (model, dataset tensors, loss computations) using `configs/train_config.py`.

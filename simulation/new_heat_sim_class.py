@@ -1,6 +1,8 @@
 import os
 import random
 import time
+import argparse
+import importlib.util
 from datetime import datetime
 
 import numpy as np
@@ -83,8 +85,9 @@ class HeatSimulation:
     def place_fireplace(max_x, max_y):
         width = random.randint(1, 4)
         height = random.randint(1, 4)
-        top_left_x = random.randint(0, max_x - width)
-        top_left_y = random.randint(0, max_y - height)
+        # Keep source patches away from x/y boundaries (Dirichlet walls).
+        top_left_x = random.randint(1, max_x - width - 1)
+        top_left_y = random.randint(1, max_y - height - 1)
         return (top_left_x, top_left_y, width, height)
 
     def create_fireplace_experiments(self, num_fires):
@@ -94,12 +97,14 @@ class HeatSimulation:
     def setup_initial_conditions(self):
         self.u[0, :, :, :] = self.ambient_temp
         for x_start, y_start, x_size, y_size in self.fireplaces:
-            self.u[0, x_start : x_start + x_size, y_start : y_start + y_size, :2] = self.initial_fire_temp
+            # Source occupies interior z layers only (avoid z=0 and z=Nz-1 boundaries).
+            self.u[0, x_start : x_start + x_size, y_start : y_start + y_size, 1:3] = self.initial_fire_temp
 
     def setup_source_term(self):
         self.source_term = torch.zeros_like(self.u[0], dtype=self.work_dtype, device=self.device)
         for x_start, y_start, x_size, y_size in self.fireplaces:
-            self.source_term[x_start : x_start + x_size, y_start : y_start + y_size, :2] = self.source_intensity
+            # Match initial hot zone placement: interior z layers only.
+            self.source_term[x_start : x_start + x_size, y_start : y_start + y_size, 1:3] = self.source_intensity
 
     def run_simulation(self):
         self.tic = time.perf_counter()
@@ -179,10 +184,93 @@ def run_experiment(num_fires, device):
     simulation.save_results()
 
 
+def load_runtime_config(config_path):
+    spec = importlib.util.spec_from_file_location("new_sim_config", config_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Could not load config from: {config_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    num_fires_list = list(getattr(module, "NUM_FIRES_LIST", [15, 20, 25]))
+    experiments_per_fire_count = int(getattr(module, "EXPERIMENTS_PER_FIRE_COUNT", 10))
+    data_root = str(getattr(module, "DATA_ROOT", "./data"))
+    dataset_name = str(getattr(module, "DATASET_NAME", "new_detailed_heat_sim_f64"))
+    total_time = float(getattr(module, "T", 10.0))
+    dt = float(getattr(module, "DT", 0.001))
+    include_axes = bool(getattr(module, "INCLUDE_AXES", True))
+    chunk_t = int(getattr(module, "CHUNK_T", 1))
+    device_name = str(getattr(module, "DEVICE", "auto"))
+
+    if not num_fires_list:
+        raise ValueError("NUM_FIRES_LIST must not be empty.")
+    if any(int(n) <= 0 for n in num_fires_list):
+        raise ValueError("All entries in NUM_FIRES_LIST must be > 0.")
+    if experiments_per_fire_count <= 0:
+        raise ValueError("EXPERIMENTS_PER_FIRE_COUNT must be > 0.")
+    if total_time <= 0.0:
+        raise ValueError("T must be > 0.")
+    if dt <= 0.0:
+        raise ValueError("DT must be > 0.")
+
+    nt_float = total_time / dt
+    nt = int(round(nt_float))
+    if nt <= 0:
+        raise ValueError(f"Invalid Nt computed from T/DT: T={total_time}, DT={dt}, Nt={nt}")
+    if not np.isclose(nt_float, nt, rtol=0.0, atol=1e-12):
+        raise ValueError(
+            f"T/DT must be an integer (within tolerance). Got T={total_time}, DT={dt}, T/DT={nt_float}"
+        )
+
+    return {
+        "num_fires_list": [int(n) for n in num_fires_list],
+        "experiments_per_fire_count": experiments_per_fire_count,
+        "out_root": os.path.join(data_root, dataset_name),
+        "dataset_name": dataset_name,
+        "T": total_time,
+        "dt": dt,
+        "Nt": nt,
+        "num_time_points": nt + 1,
+        "include_axes": include_axes,
+        "chunk_t": chunk_t,
+        "device_name": device_name,
+    }
+
+
+def resolve_device(device_name):
+    if device_name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device_name)
+
+
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    for num_fires in [15,20,25]:
+    parser = argparse.ArgumentParser(description="Run heat simulations using a python config file.")
+    parser.add_argument("--config", default="configs/new_sim_config.py", help="Path to simulation config file.")
+    args = parser.parse_args()
+
+    cfg = load_runtime_config(args.config)
+    device = resolve_device(cfg["device_name"])
+    os.makedirs(cfg["out_root"], exist_ok=True)
+
+    print(f"Using config: {args.config}")
+    print(f"Dataset: {cfg['dataset_name']} -> {cfg['out_root']}")
+    print(
+        f"T={cfg['T']}s, dt={cfg['dt']}s, Nt={cfg['Nt']} steps, "
+        f"saved time points (including t=0): {cfg['num_time_points']}"
+    )
+
+    for num_fires in cfg["num_fires_list"]:
         print(f"Number of fires: {num_fires}")
-        for i in range(10):
-            print(f"Calculating experiment number {i}...")
-            run_experiment(num_fires, device)
+        for i in range(cfg["experiments_per_fire_count"]):
+            print(f"Calculating experiment {i + 1}/{cfg['experiments_per_fire_count']}...")
+            simulation = HeatSimulation(
+                num_fires=num_fires,
+                T=cfg["T"],
+                Nt=cfg["Nt"],
+                device=device,
+            )
+            simulation.run_simulation()
+            simulation.save_results(
+                out_root=cfg["out_root"],
+                include_axes=cfg["include_axes"],
+                chunk_t=cfg["chunk_t"],
+            )

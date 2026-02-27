@@ -27,4 +27,7 @@ echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 
-python -m simulation.new_heat_sim_class
+SIM_CONFIG="${SIM_CONFIG:-configs/new_sim_config.py}"
+echo "SIM_CONFIG=${SIM_CONFIG}"
+
+python -m simulation.new_heat_sim_class --config "${SIM_CONFIG}"

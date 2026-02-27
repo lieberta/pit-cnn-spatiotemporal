@@ -17,26 +17,39 @@ module load anaconda3/2021.11
 eval "$(conda shell.bash hook)"
 conda activate /beegfs/home/l/lieberta/venv/penn-venv/
 
-BASE_PATH="${BASE_PATH:-./data/testset_20s}"
-OUT_ROOT="${OUT_ROOT:-./plots/testset_20s_3d}"
+BASE_PATH="${BASE_PATH:-./data/new_detailed_heat_sim_f64}"
+OUT_ROOT="${OUT_ROOT:-./plots/new_detailed_heat_sim_f64_3d}"
 NORMALIZED="${NORMALIZED:-0}"           # 1 => --normalized
 FPS="${FPS:-10}"
-FRAME_STRIDE="${FRAME_STRIDE:-2}"
+FRAME_STRIDE="${FRAME_STRIDE:-1}"
 MAX_FRAMES="${MAX_FRAMES:-0}"           # 0 => all
-DOWNSAMPLE="${DOWNSAMPLE:-2}"
+DOWNSAMPLE="${DOWNSAMPLE:-1}"
 THRESHOLD_QUANTILE="${THRESHOLD_QUANTILE:-0.90}"
-STYLE="${STYLE:-cloud}"
+STYLE="${STYLE:-voxel}"
 MAX_CLOUD_POINTS="${MAX_CLOUD_POINTS:-12000}"
 CLOUD_GAMMA="${CLOUD_GAMMA:-2.2}"
-SOURCE_MARKER_MODE="${SOURCE_MARKER_MODE:-all}"
+SOURCE_MARKER_MODE="${SOURCE_MARKER_MODE:-none}"
 HEAT_THRESHOLD="${HEAT_THRESHOLD:-0.04}"
+VIZ_VMAX="${VIZ_VMAX:-5000}"
+VIZ_VMIN="${VIZ_VMIN:-}"
+VIZ_GAMMA="${VIZ_GAMMA:-1.6}"
+CMAP="${CMAP:-YlOrRd}"
+ASSUME_DT="${ASSUME_DT:-0.001}"
 ELEV="${ELEV:-25}"
 AZIM="${AZIM:--45}"
-SAVE_FRAMES_EVERY="${SAVE_FRAMES_EVERY:-10}"   # 0 disables PNG frame export
+SAVE_FRAMES_EVERY="${SAVE_FRAMES_EVERY:-0}"   # 0 disables PNG frame export
 EXPERIMENT="${EXPERIMENT:-}"
+EXPERIMENT_PATH="${EXPERIMENT_PATH:-}"
+LAST_FRAME_ONLY="${LAST_FRAME_ONLY:-0}" # 1 => only one PNG at final timestep (no mp4)
+ALLOW_ALL_EXPERIMENTS="${ALLOW_ALL_EXPERIMENTS:-0}" # 1 => allow processing all experiment_* folders
+
+if [ -z "$EXPERIMENT" ] && [ -z "$EXPERIMENT_PATH" ] && [ "$ALLOW_ALL_EXPERIMENTS" != "1" ]; then
+  echo "ERROR: set EXPERIMENT or EXPERIMENT_PATH. For full-bulk rendering set ALLOW_ALL_EXPERIMENTS=1 explicitly."
+  exit 1
+fi
 
 CMD=(
-  python -m evaluation.visualize_testset_3d
+  python -m evaluation.visualize_heatvid_3d
   --base-path "$BASE_PATH"
   --out-root "$OUT_ROOT"
   --fps "$FPS"
@@ -49,10 +62,18 @@ CMD=(
   --cloud-gamma "$CLOUD_GAMMA"
   --source-marker-mode "$SOURCE_MARKER_MODE"
   --heat-threshold "$HEAT_THRESHOLD"
+  --viz-vmax "$VIZ_VMAX"
+  --viz-gamma "$VIZ_GAMMA"
+  --cmap "$CMAP"
+  --assume-dt "$ASSUME_DT"
   --elev "$ELEV"
   --azim "$AZIM"
   --save-frames-every "$SAVE_FRAMES_EVERY"
 )
+
+if [ -n "$VIZ_VMIN" ]; then
+  CMD+=(--viz-vmin "$VIZ_VMIN")
+fi
 
 if [ "$NORMALIZED" = "1" ]; then
   CMD+=(--normalized)
@@ -60,6 +81,14 @@ fi
 
 if [ -n "$EXPERIMENT" ]; then
   CMD+=(--experiment "$EXPERIMENT")
+fi
+
+if [ -n "$EXPERIMENT_PATH" ]; then
+  CMD+=(--experiment-path "$EXPERIMENT_PATH")
+fi
+
+if [ "$LAST_FRAME_ONLY" = "1" ]; then
+  CMD+=(--last-frame-only)
 fi
 
 echo "Running: ${CMD[*]}"

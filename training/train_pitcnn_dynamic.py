@@ -24,6 +24,7 @@ class BaseModel_dynamic(nn.Module):
     def train_model(
         self,
         a,
+        mse_weight,
         dataset,
         num_epochs,
         batch_size,
@@ -63,6 +64,7 @@ class BaseModel_dynamic(nn.Module):
         max_temp = getattr(dataset, "max_temp", 27373.34765625)
         criterion = CombinedLoss_dynamic(
             a=a,
+            mse_weight=mse_weight,
             device=device,
             min_temp=min_temp,
             max_temp=max_temp,

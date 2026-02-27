@@ -5,13 +5,31 @@ import torch.nn.functional as F
 
 
 class Laplacian3DLayer(nn.Module):
-    def __init__(self, device):
+    def __init__(
+        self,
+        device,
+        Lx=6.3,
+        Ly=3.1,
+        Lz=1.5,
+        Nx=64,
+        Ny=32,
+        Nz=16,
+    ):
         super(Laplacian3DLayer, self).__init__()
-        self.laplace_kernel_3d = torch.tensor(
-            [[[[[0, 0, 0], [0, 1, 0], [0, 0, 0]], [[0, 1, 0], [1, -6, 1], [0, 1, 0]], [[0, 0, 0], [0, 1, 0], [0, 0, 0]]]]],
-            dtype=torch.float32,
-            requires_grad=False,
-        ).to(device)
+        dx = Lx / (Nx - 1)
+        dy = Ly / (Ny - 1)
+        dz = Lz / (Nz - 1)
+
+        # 3D 6-point finite-difference Laplacian:
+        # d2u/dx2 + d2u/dy2 + d2u/dz2 with grid spacings dx, dy, dz.
+        # Neighbor weights are 1/d*^2, and center is the negative sum of all neighbor contributions.
+        kernel = torch.zeros((3, 3, 3), dtype=torch.float32)
+        kernel[1, 1, 1] = -2.0 * ((1.0 / (dx ** 2)) + (1.0 / (dy ** 2)) + (1.0 / (dz ** 2)))
+        kernel[1, 1, 0] = kernel[1, 1, 2] = 1.0 / (dz ** 2)
+        kernel[1, 0, 1] = kernel[1, 2, 1] = 1.0 / (dy ** 2)
+        kernel[0, 1, 1] = kernel[2, 1, 1] = 1.0 / (dx ** 2)
+
+        self.laplace_kernel_3d = kernel.unsqueeze(0).unsqueeze(0).to(device)
 
     def forward(self, x):
         kernel = self.laplace_kernel_3d
@@ -71,6 +89,7 @@ class CombinedLoss_dynamic(nn.Module):
     def __init__(
         self,
         a,
+        mse_weight,
         device,
         alpha=0.0257,
         source_intensity=100000.0,
@@ -88,6 +107,7 @@ class CombinedLoss_dynamic(nn.Module):
         self.fire_threshold = (source_threshold - min_temp) / temp_range
         self.mse_loss = nn.MSELoss().to(device)
         self.a = a
+        self.mse_weight = float(mse_weight)
 
     def temporal_derivative(self, output, output_past, t, t_past):
         # expand the tensor with the time value (for a whole batch) to match output dimensions
@@ -107,10 +127,18 @@ class CombinedLoss_dynamic(nn.Module):
             physics = torch.zeros((), dtype=output.dtype, device=output.device)
         else:
             temporal_derivative = self.temporal_derivative(output, output_past, t, t_past)
-            laplacian = self.laplacian_layer(output)
+            # Match simulator's explicit Euler step: Laplacian is evaluated at the past state.
+            laplacian = self.laplacian_layer(output_past)
             source_term = self.create_source_term(input)
-            physics = torch.mean((temporal_derivative - self.alpha * laplacian - source_term) ** 2)
-        total = mse + self.a * physics
+            # Enforce PDE residual only on interior cells; boundary cells are fixed by Dirichlet conditions.
+            inner = (slice(None), slice(None), slice(1, -1), slice(1, -1), slice(1, -1))
+            residual_inner = (
+                temporal_derivative[inner]
+                - self.alpha * laplacian[inner]
+                - source_term[inner]
+            )
+            physics = torch.mean(residual_inner ** 2)
+        total = self.mse_weight * mse + self.a * physics
         return total, mse, physics
 
     def forward(self, input, output, output_past, t, t_past, target):

@@ -158,13 +158,13 @@ def static(predicted_time, a, lr, batch, epochs, channels, name, runs_root, resu
                       run_id=run_id, a=a, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
 
-def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed, comment=None):
+def dynamic(a, mse_weight, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed, comment=None):
 
     # a function that takes all important parameter as input, creates and trains the model
 
     run_id = resume_run_id or make_run_id("dynamic")
     model_name = run_id
-    model_root = os.path.join(runs_root, name)
+    model_root = os.path.join(runs_root, name) if name else runs_root
     model_dir = os.path.join(model_root, model_name)
     model_pth = os.path.join(model_dir, f"{model_name}.pth")
 
@@ -185,6 +185,7 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
             batch = config.get("batch", batch)
             channels = config.get("channels", channels)
             a = config.get("a", a)
+            mse_weight = config.get("mse_weight", mse_weight)
             name = config.get("name", name)
         print(f"The model '{model_name}' already exists and will be trained further.")
     else:
@@ -194,6 +195,7 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
             "run_id": run_id,
             "model_class": model_class.__name__,
             "a": a,
+            "mse_weight": mse_weight,
             "lr": lr,
             "batch": batch,
             "epochs": epochs,
@@ -210,6 +212,7 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
     # Validate that all required parameters are present before training
     required = {
         "a": a,
+        "mse_weight": mse_weight,
         "lr": lr,
         "batch": batch,
         "epochs": epochs,
@@ -229,7 +232,7 @@ def dynamic(a, lr, batch, epochs, channels, model_class, name, runs_root, resume
     dataset = HeatEquationMultiDataset_dynamic(base_path=data_path)
     model = model_class(c=channels).to(device=device, dtype=TRAIN_DTYPE)
     print(f'Train Model:')
-    model.train_model(a=a, dataset=dataset, num_epochs=epochs, batch_size=batch,
+    model.train_model(a=a, mse_weight=mse_weight, dataset=dataset, num_epochs=epochs, batch_size=batch,
                       learning_rate=lr, model_name=model_name, save_path=model_root,
                       run_id=run_id, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
@@ -245,7 +248,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     cfg = load_config_module(args.config)
-    required_cfg_fields = ["epochs", "a_list", "model_class_name", "model_name", "run_comment"]
+    required_cfg_fields = ["epochs", "lr", "a_list", "model_class_name", "model_name", "run_comment"]
     missing_cfg_fields = [field for field in required_cfg_fields if not hasattr(cfg, field)]
     if missing_cfg_fields:
         raise ValueError(
@@ -255,6 +258,7 @@ if __name__ == '__main__':
     
     epochs = cfg.epochs
     a_list = cfg.a_list
+    mse_weight = float(getattr(cfg, "mse_weight", 1.0))
     model_class_name = cfg.model_class_name
     model_name = cfg.model_name
     run_comment = cfg.run_comment
@@ -288,7 +292,7 @@ if __name__ == '__main__':
 
     # Shared training parameters
     channels = 16
-    lr = 0.001
+    lr = cfg.lr
     batch = 32 * 4
 
     # Static parameters
@@ -297,8 +301,8 @@ if __name__ == '__main__':
     auto_collect_static = False
 
     # Dynamic parameters
-    resume_run_ids_dynamic = []  # z.B. ["dynamic_20260101-120000_ab12cd", "dynamic_20260102-130000_ef34gh"]
-    auto_collect_dynamic = False    # True if i want to further train my existing models
+    resume_run_ids_dynamic = list(getattr(cfg, "resume_run_ids_dynamic", []))
+    auto_collect_dynamic = bool(getattr(cfg, "auto_collect_dynamic", False))  # True if i want to further train my existing models
 
     # collects all ids from input values, i.e. a = 1
     if auto_collect_static:
@@ -336,12 +340,13 @@ if __name__ == '__main__':
         if resume_run_ids_dynamic:
             for run_id in resume_run_ids_dynamic:
                 dynamic(a=None, lr=None, batch=None, epochs=epochs, channels=None,
+                        mse_weight=None,
                         model_class=selected_model_class, name=None,
                         runs_root=runs_root_dynamic, resume_run_id=run_id,
                         device=device, seed=seed, comment=run_comment)
         else:
             for a in a_list:
-                dynamic(a=a, lr=lr, batch=batch, epochs=epochs, channels=channels,
+                dynamic(a=a, mse_weight=mse_weight, lr=lr, batch=batch, epochs=epochs, channels=channels,
                         model_class=selected_model_class, name=model_name,
                         runs_root=runs_root_dynamic, resume_run_id=None,
                         device=device, seed=seed, comment=run_comment)

@@ -95,7 +95,7 @@ class PITCNN_dynamic(BaseModel_dynamic):
         x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
         x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
         x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
-        x[:, :, :, :, 0] = x_input[0, 0, -1, -1, -1]
+        x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
         x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
         return x
 
@@ -149,7 +149,7 @@ class PITCNN_dynamic_latenttime1(PITCNN_dynamic):
         x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
         x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
         x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
-        x[:, :, :, :, 0] = x_input[0, 0, -1, -1, -1]
+        x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
         x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
         return x
 
