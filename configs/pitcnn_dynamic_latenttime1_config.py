@@ -11,6 +11,11 @@ loss_weight_schedule = [
 ]
 model_class_name = "PITCNN_dynamic_latenttime1"
 model_name = model_class_name + "_physics_only_f32_V0.3"
+# Data subset controls for dataset-size sweeps:
+data_path = "./data/new_detailed_heat_sim_f64/"
+data_modulo = 1
+data_max_experiments = None
+data_experiment_offset = 0
 run_comment = (
     "Two-phase run: first 50 epochs physics-only, next 50 epochs mse-only."
 )

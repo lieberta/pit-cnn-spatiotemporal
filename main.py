@@ -158,7 +158,26 @@ def static(predicted_time, a, lr, batch, epochs, channels, name, runs_root, resu
                       run_id=run_id, a=a, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
 
-def dynamic(lp_weight, mse_weight, loss_weight_schedule, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed, comment=None):
+def dynamic(
+    lp_weight,
+    mse_weight,
+    loss_weight_schedule,
+    lr,
+    batch,
+    epochs,
+    channels,
+    model_class,
+    name,
+    runs_root,
+    resume_run_id,
+    device,
+    seed,
+    comment=None,
+    data_path="./data/new_detailed_heat_sim_f64/",
+    data_modulo=1,
+    data_max_experiments=None,
+    data_experiment_offset=0,
+):
 
     # a function that takes all important parameter as input, creates and trains the model
 
@@ -204,6 +223,11 @@ def dynamic(lp_weight, mse_weight, loss_weight_schedule, lr, batch, epochs, chan
             "dataset_version": "unknown",
             "tags": ["dynamic", f"lp{lp_weight}"],
             "name": name,
+            # Data-sampling controls for dataset-size sweeps.
+            "data_path": data_path,
+            "data_modulo": int(data_modulo),
+            "data_max_experiments": data_max_experiments,
+            "data_experiment_offset": int(data_experiment_offset),
         }
         if loss_weight_schedule:
             config["loss_weight_schedule"] = loss_weight_schedule
@@ -228,10 +252,24 @@ def dynamic(lp_weight, mse_weight, loss_weight_schedule, lr, batch, epochs, chan
             f"For resume runs, ensure config.json exists in '{model_dir}' with these fields."
         )
 
-    data_path= './data/new_detailed_heat_sim_f64/'
     print(f'Create Dataset HeatEquationMultiDatset_dynamic from {data_path}...')
     # this is for version 2 training package:
-    dataset = HeatEquationMultiDataset_dynamic(base_path=data_path)
+    dataset = HeatEquationMultiDataset_dynamic(
+        base_path=data_path,
+        modulo=int(data_modulo),
+        max_experiments=data_max_experiments,
+        experiment_offset=int(data_experiment_offset),
+    )
+    print(
+        f"Selected experiment folders: {dataset.num_selected_experiments} "
+        f"(modulo={data_modulo}, max={data_max_experiments}, offset={data_experiment_offset})"
+    )
+    # Persist the effective data size into run metadata for later comparisons.
+    run_config = load_run_config(model_dir) or {}
+    run_config["selected_experiment_folders"] = int(dataset.num_selected_experiments)
+    run_config["dataset_samples"] = int(len(dataset))
+    write_run_config(model_dir, run_config)
+
     model = model_class(c=channels).to(device=device, dtype=TRAIN_DTYPE)
     print(f'Train Model:')
     model.train_model(lp_weight=lp_weight, mse_weight=mse_weight, loss_weight_schedule=loss_weight_schedule,
@@ -267,6 +305,10 @@ if __name__ == '__main__':
     model_class_name = cfg.model_class_name
     model_name = cfg.model_name
     run_comment = cfg.run_comment
+    data_path = getattr(cfg, "data_path", "./data/new_detailed_heat_sim_f64/")
+    data_modulo = int(getattr(cfg, "data_modulo", 1))
+    data_max_experiments = getattr(cfg, "data_max_experiments", None)
+    data_experiment_offset = int(getattr(cfg, "data_experiment_offset", 0))
 
     torch.set_default_dtype(TRAIN_DTYPE)
 
@@ -369,18 +411,27 @@ if __name__ == '__main__':
                         lr=None, batch=None, epochs=epochs, channels=None,
                         model_class=selected_model_class, name=None,
                         runs_root=runs_root_dynamic, resume_run_id=run_id,
-                        device=device, seed=seed, comment=run_comment)
+                        device=device, seed=seed, comment=run_comment,
+                        data_path=data_path, data_modulo=data_modulo,
+                        data_max_experiments=data_max_experiments,
+                        data_experiment_offset=data_experiment_offset)
         else:
             if loss_weight_schedule:
                 dynamic(lp_weight=0.0, mse_weight=mse_weight, loss_weight_schedule=loss_weight_schedule,
                         lr=lr, batch=batch, epochs=epochs, channels=channels,
                         model_class=selected_model_class, name=model_name,
                         runs_root=runs_root_dynamic, resume_run_id=None,
-                        device=device, seed=seed, comment=run_comment)
+                        device=device, seed=seed, comment=run_comment,
+                        data_path=data_path, data_modulo=data_modulo,
+                        data_max_experiments=data_max_experiments,
+                        data_experiment_offset=data_experiment_offset)
             else:
                 for lp_weight in lp_weight_list:
                     dynamic(lp_weight=lp_weight, mse_weight=mse_weight, loss_weight_schedule=None,
                             lr=lr, batch=batch, epochs=epochs, channels=channels,
                             model_class=selected_model_class, name=model_name,
                             runs_root=runs_root_dynamic, resume_run_id=None,
-                            device=device, seed=seed, comment=run_comment)
+                            device=device, seed=seed, comment=run_comment,
+                            data_path=data_path, data_modulo=data_modulo,
+                            data_max_experiments=data_max_experiments,
+                            data_experiment_offset=data_experiment_offset)

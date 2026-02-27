@@ -170,6 +170,8 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self,
         modulo=1,
         base_path="./data/new_detailed_heat_sim_f64/",
+        max_experiments=None,
+        experiment_offset=0,
         cache_size=4,
         use_index_cache=True,
         default_num_timesteps=10001,
@@ -178,12 +180,19 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self.data_cache = OrderedDict()
         self.cache_size = int(cache_size)
         self.base_path = base_path
+        # Keep every `modulo`th experiment folder (e.g. modulo=5 -> every 5th folder).
         self.modulo = int(modulo)
+        # Optional absolute limit and offset to sweep dataset size deterministically.
+        self.max_experiments = None if max_experiments is None else int(max_experiments)
+        self.experiment_offset = int(experiment_offset)
         self.use_index_cache = bool(use_index_cache)
         self.default_num_timesteps = int(default_num_timesteps)
         self.min_temp, self.max_temp, self.temp_range = load_normalization_values(base_path)
+        # Number of selected experiment folders (tracked for run metadata).
+        self.num_selected_experiments = 0
 
         file_infos = self._load_or_build_file_infos()
+        self.num_selected_experiments = len(file_infos)
         for path, num_timesteps in file_infos:
             for predicted_time in range(1, num_timesteps):
                 self.files.append((path, predicted_time))
@@ -228,7 +237,11 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         return (input_tensor, predicted_time_tensor), target_tensor
 
     def _index_cache_path(self):
-        return os.path.join(self.base_path, f".dynamic_index_mod{self.modulo}.json")
+        limit_tag = "all" if self.max_experiments is None else str(self.max_experiments)
+        return os.path.join(
+            self.base_path,
+            f".dynamic_index_mod{self.modulo}_off{self.experiment_offset}_lim{limit_tag}.json",
+        )
 
     def _load_or_build_file_infos(self):
         cache_path = self._index_cache_path()
@@ -268,7 +281,10 @@ class HeatEquationMultiDataset_dynamic(Dataset):
     def _build_file_infos(self):
         infos = []
         folders = sorted(list_experiment_folders(self.base_path))
+        selected_count = 0
         for i, folder in enumerate(folders):
+            if i < self.experiment_offset:
+                continue
             if i % self.modulo != 0:
                 continue
 
@@ -279,6 +295,9 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             num_timesteps = self._read_num_timesteps(folder, store, self.default_num_timesteps)
             if num_timesteps > 1:
                 infos.append((store, num_timesteps))
+                selected_count += 1
+                if self.max_experiments is not None and selected_count >= self.max_experiments:
+                    break
         return infos
 
     @staticmethod
