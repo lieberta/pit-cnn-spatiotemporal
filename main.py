@@ -158,7 +158,7 @@ def static(predicted_time, a, lr, batch, epochs, channels, name, runs_root, resu
                       run_id=run_id, a=a, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
 
-def dynamic(a, mse_weight, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed, comment=None):
+def dynamic(lp_weight, mse_weight, loss_weight_schedule, lr, batch, epochs, channels, model_class, name, runs_root, resume_run_id, device, seed, comment=None):
 
     # a function that takes all important parameter as input, creates and trains the model
 
@@ -184,8 +184,8 @@ def dynamic(a, mse_weight, lr, batch, epochs, channels, model_class, name, runs_
             lr = config.get("lr", lr)
             batch = config.get("batch", batch)
             channels = config.get("channels", channels)
-            a = config.get("a", a)
-            mse_weight = config.get("mse_weight", mse_weight)
+            # Intentionally do not overwrite lp_weight/mse_weight from past config
+            # so resume/new training can change loss weights from current config.
             name = config.get("name", name)
         print(f"The model '{model_name}' already exists and will be trained further.")
     else:
@@ -194,7 +194,7 @@ def dynamic(a, mse_weight, lr, batch, epochs, channels, model_class, name, runs_
         config = {
             "run_id": run_id,
             "model_class": model_class.__name__,
-            "a": a,
+            "lp_weight": lp_weight,
             "mse_weight": mse_weight,
             "lr": lr,
             "batch": batch,
@@ -202,16 +202,18 @@ def dynamic(a, mse_weight, lr, batch, epochs, channels, model_class, name, runs_
             "channels": channels,
             "seed": seed,
             "dataset_version": "unknown",
-            "tags": ["dynamic", f"a{a}"],
+            "tags": ["dynamic", f"lp{lp_weight}"],
             "name": name,
         }
+        if loss_weight_schedule:
+            config["loss_weight_schedule"] = loss_weight_schedule
         if comment:
             config["comment"] = comment
         write_run_config(model_dir, config)
 
     # Validate that all required parameters are present before training
     required = {
-        "a": a,
+        "lp_weight": lp_weight,
         "mse_weight": mse_weight,
         "lr": lr,
         "batch": batch,
@@ -232,7 +234,8 @@ def dynamic(a, mse_weight, lr, batch, epochs, channels, model_class, name, runs_
     dataset = HeatEquationMultiDataset_dynamic(base_path=data_path)
     model = model_class(c=channels).to(device=device, dtype=TRAIN_DTYPE)
     print(f'Train Model:')
-    model.train_model(a=a, mse_weight=mse_weight, dataset=dataset, num_epochs=epochs, batch_size=batch,
+    model.train_model(lp_weight=lp_weight, mse_weight=mse_weight, loss_weight_schedule=loss_weight_schedule,
+                      dataset=dataset, num_epochs=epochs, batch_size=batch,
                       learning_rate=lr, model_name=model_name, save_path=model_root,
                       run_id=run_id, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path)
@@ -248,7 +251,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     cfg = load_config_module(args.config)
-    required_cfg_fields = ["epochs", "lr", "a_list", "model_class_name", "model_name", "run_comment"]
+    required_cfg_fields = ["epochs", "lr", "model_class_name", "model_name", "run_comment"]
     missing_cfg_fields = [field for field in required_cfg_fields if not hasattr(cfg, field)]
     if missing_cfg_fields:
         raise ValueError(
@@ -257,8 +260,10 @@ if __name__ == '__main__':
 
     
     epochs = cfg.epochs
-    a_list = cfg.a_list
+    a_list = list(getattr(cfg, "a_list", [0, 1]))
+    lp_weight_list = list(getattr(cfg, "lp_weight_list", getattr(cfg, "a_list", [])))
     mse_weight = float(getattr(cfg, "mse_weight", 1.0))
+    loss_weight_schedule = list(getattr(cfg, "loss_weight_schedule", []))
     model_class_name = cfg.model_class_name
     model_name = cfg.model_name
     run_comment = cfg.run_comment
@@ -304,6 +309,24 @@ if __name__ == '__main__':
     resume_run_ids_dynamic = list(getattr(cfg, "resume_run_ids_dynamic", []))
     auto_collect_dynamic = bool(getattr(cfg, "auto_collect_dynamic", False))  # True if i want to further train my existing models
 
+    if inferred_mode == "dynamic":
+        if not lp_weight_list and not loss_weight_schedule:
+            raise ValueError(
+                "Dynamic config must define 'lp_weight_list' (or legacy 'a_list') "
+                "or 'loss_weight_schedule'."
+            )
+        if loss_weight_schedule:
+            schedule_epochs = sum(int(p["epochs"]) for p in loss_weight_schedule)
+            if schedule_epochs != epochs:
+                raise ValueError(
+                    f"loss_weight_schedule covers {schedule_epochs} epochs, but config epochs={epochs}."
+                )
+            for phase in loss_weight_schedule:
+                if not {"epochs", "lp_weight", "mse_weight"} <= set(phase.keys()):
+                    raise ValueError(
+                        "Each loss_weight_schedule phase must contain: epochs, lp_weight, mse_weight."
+                    )
+
     # collects all ids from input values, i.e. a = 1
     if auto_collect_static:
         resume_run_ids_static = collect_run_ids(
@@ -339,14 +362,25 @@ if __name__ == '__main__':
     if inferred_mode == "dynamic":
         if resume_run_ids_dynamic:
             for run_id in resume_run_ids_dynamic:
-                dynamic(a=None, lr=None, batch=None, epochs=epochs, channels=None,
-                        mse_weight=None,
+                dynamic(
+                        lp_weight=(0.0 if loss_weight_schedule else float(lp_weight_list[0])),
+                        mse_weight=mse_weight,
+                        loss_weight_schedule=loss_weight_schedule,
+                        lr=None, batch=None, epochs=epochs, channels=None,
                         model_class=selected_model_class, name=None,
                         runs_root=runs_root_dynamic, resume_run_id=run_id,
                         device=device, seed=seed, comment=run_comment)
         else:
-            for a in a_list:
-                dynamic(a=a, mse_weight=mse_weight, lr=lr, batch=batch, epochs=epochs, channels=channels,
+            if loss_weight_schedule:
+                dynamic(lp_weight=0.0, mse_weight=mse_weight, loss_weight_schedule=loss_weight_schedule,
+                        lr=lr, batch=batch, epochs=epochs, channels=channels,
                         model_class=selected_model_class, name=model_name,
                         runs_root=runs_root_dynamic, resume_run_id=None,
                         device=device, seed=seed, comment=run_comment)
+            else:
+                for lp_weight in lp_weight_list:
+                    dynamic(lp_weight=lp_weight, mse_weight=mse_weight, loss_weight_schedule=None,
+                            lr=lr, batch=batch, epochs=epochs, channels=channels,
+                            model_class=selected_model_class, name=model_name,
+                            runs_root=runs_root_dynamic, resume_run_id=None,
+                            device=device, seed=seed, comment=run_comment)

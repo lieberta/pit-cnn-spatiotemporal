@@ -88,7 +88,7 @@ class CombinedLoss(nn.Module):
 class CombinedLoss_dynamic(nn.Module):
     def __init__(
         self,
-        a,
+        lp_weight,
         mse_weight,
         device,
         alpha=0.0257,
@@ -106,7 +106,7 @@ class CombinedLoss_dynamic(nn.Module):
         self.source_intensity = source_intensity / temp_range
         self.fire_threshold = (source_threshold - min_temp) / temp_range
         self.mse_loss = nn.MSELoss().to(device)
-        self.a = a
+        self.lp_weight = float(lp_weight)
         self.mse_weight = float(mse_weight)
 
     def temporal_derivative(self, output, output_past, t, t_past):
@@ -122,8 +122,11 @@ class CombinedLoss_dynamic(nn.Module):
         return source_term
 
     def compute_components(self, input, output, output_past, t, t_past, target):
-        mse = self.mse_loss(output, target)
-        if self.a == 0:
+        if self.mse_weight == 0.0:
+            mse = torch.zeros((), dtype=output.dtype, device=output.device)
+        else:
+            mse = self.mse_loss(output, target)
+        if self.lp_weight == 0.0:
             physics = torch.zeros((), dtype=output.dtype, device=output.device)
         else:
             temporal_derivative = self.temporal_derivative(output, output_past, t, t_past)
@@ -138,7 +141,7 @@ class CombinedLoss_dynamic(nn.Module):
                 - source_term[inner]
             )
             physics = torch.mean(residual_inner ** 2)
-        total = self.mse_weight * mse + self.a * physics
+        total = self.mse_weight * mse + self.lp_weight * physics
         return total, mse, physics
 
     def forward(self, input, output, output_past, t, t_past, target):

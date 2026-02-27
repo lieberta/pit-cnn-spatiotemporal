@@ -3,7 +3,7 @@ import torch
 # This file contains training configuration parameters for the model PITCNN_dynamic
 epochs = 10
 lr = 0.0001
-a_list = [1]
+lp_weight_list = [1.0]
 mse_weight = 1.0  # set to 0.0 for physics-only training (MSE disabled)
 model_class_name = "PITCNN_dynamic"
 model_name = model_class_name + "_f32_lr=0.0001_V0.3"

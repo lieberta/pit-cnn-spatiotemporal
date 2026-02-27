@@ -39,8 +39,9 @@ sbatch -J "gen20s" \
 
 Visualisierung:
 
-sbatch -J "viz20s3d" --export=ALL,ALLOW_ALL_EXPERIMENTS=1 slurm/visualize_heatvid_3d.slurm
+
 sbatch -J "viz_newsim3d" --export=ALL,ALLOW_ALL_EXPERIMENTS=1,OUT_ROOT=/beegfs/home/l/lieberta/projects/physics-enhanced-cnn/plots/new_detailed_heat_sim_f64_3d slurm/visualize_heatvid_3d.slurm
+
 sbatch -J "viz_lastframe" --export=ALL,OUT_ROOT=/beegfs/home/l/lieberta/projects/physics-enhanced-cnn/plots/new_detailed_heat_sim_f64_3d,LAST_FRAME_ONLY=1 slurm/visualize_heatvid_3d.slurm
 sbatch -J "viz_25_lastframe" --export=ALL,EXPERIMENT=experiment_25_20260223_145422,OUT_ROOT=/beegfs/home/l/lieberta/projects/physics-enhanced-cnn/plots/new_detailed_heat_sim_f64_3d,LAST_FRAME_ONLY=1,THRESHOLD_QUANTILE=0.50,HEAT_THRESHOLD=0.01,VIZ_VMAX=5000 slurm/visualize_heatvid_3d.slurm  # output: .../plots/new_detailed_heat_sim_f64_3d/experiment_25_.../last_frame.png
 sbatch -J "viz_quick_25" --export=ALL,EXPERIMENT=experiment_25_20260223_145422,OUT_ROOT=/beegfs/home/l/lieberta/projects/physics-enhanced-cnn/plots/new_detailed_heat_sim_f64_3d slurm/visualize_heatvid_3d_quick.slurm

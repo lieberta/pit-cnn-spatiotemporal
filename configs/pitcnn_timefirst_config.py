@@ -2,7 +2,8 @@ import torch
 
 epochs = 10
 lr = 0.001
-a_list = [1]
+lp_weight_list = [1.0]
+mse_weight = 1.0
 model_class_name = "PITCNN_dynamic_timefirst"
 model_name = model_class_name + "_f32_V0.3"
 run_comment = (

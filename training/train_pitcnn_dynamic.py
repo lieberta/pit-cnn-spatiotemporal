@@ -23,7 +23,7 @@ class BaseModel_dynamic(nn.Module):
 
     def train_model(
         self,
-        a,
+        lp_weight,
         mse_weight,
         dataset,
         num_epochs,
@@ -35,6 +35,7 @@ class BaseModel_dynamic(nn.Module):
         channels=None,
         seed=None,
         resume_checkpoint_path=None,
+        loss_weight_schedule=None,
     ):
         tic = time.perf_counter()
 
@@ -63,7 +64,7 @@ class BaseModel_dynamic(nn.Module):
         min_temp = getattr(dataset, "min_temp", 20.0)
         max_temp = getattr(dataset, "max_temp", 27373.34765625)
         criterion = CombinedLoss_dynamic(
-            a=a,
+            lp_weight=lp_weight,
             mse_weight=mse_weight,
             device=device,
             min_temp=min_temp,
@@ -76,7 +77,24 @@ class BaseModel_dynamic(nn.Module):
             start_epoch = load_checkpoint(self, optimizer, resume_checkpoint_path, device)
             print(f"Resuming from checkpoint: {resume_checkpoint_path} (start_epoch={start_epoch})")
 
+        if loss_weight_schedule:
+            lp_by_epoch = []
+            mse_by_epoch = []
+            for phase in loss_weight_schedule:
+                phase_epochs = int(phase["epochs"])
+                lp_by_epoch.extend([float(phase["lp_weight"])] * phase_epochs)
+                mse_by_epoch.extend([float(phase["mse_weight"])] * phase_epochs)
+            if len(lp_by_epoch) != num_epochs:
+                raise ValueError(
+                    f"loss_weight_schedule must cover exactly num_epochs={num_epochs}, got {len(lp_by_epoch)} epochs."
+                )
+        else:
+            lp_by_epoch = [float(lp_weight)] * num_epochs
+            mse_by_epoch = [float(mse_weight)] * num_epochs
+
         for epoch in range(start_epoch, num_epochs):
+            criterion.lp_weight = float(lp_by_epoch[epoch])
+            criterion.mse_weight = float(mse_by_epoch[epoch])
             train_loss = 0.0
             train_mse = 0.0
             train_physics = 0.0
@@ -145,7 +163,7 @@ class BaseModel_dynamic(nn.Module):
             os.makedirs(model_dir, exist_ok=True)
             metrics_path = os.path.join(model_dir, "metrics.csv")
             components_path = os.path.join(model_dir, "loss_components.csv")
-            header = ["run_id", "epoch", "train_loss", "val_loss", "lr", "a", "channels", "batch", "seed"]
+            header = ["run_id", "epoch", "train_loss", "val_loss", "lr", "lp_weight", "mse_weight", "channels", "batch", "seed"]
             components_header = [
                 "run_id",
                 "epoch",
@@ -153,7 +171,8 @@ class BaseModel_dynamic(nn.Module):
                 "train_physics_loss",
                 "val_mse_loss",
                 "val_physics_loss",
-                "a",
+                "lp_weight",
+                "mse_weight",
             ]
             row = {
                 "run_id": run_id or model_name,
@@ -161,7 +180,8 @@ class BaseModel_dynamic(nn.Module):
                 "train_loss": avg_train_loss,
                 "val_loss": avg_val_loss,
                 "lr": learning_rate,
-                "a": a,
+                "lp_weight": float(criterion.lp_weight),
+                "mse_weight": float(criterion.mse_weight),
                 "channels": channels,
                 "batch": batch_size,
                 "seed": seed,
@@ -173,7 +193,8 @@ class BaseModel_dynamic(nn.Module):
                 "train_physics_loss": avg_train_physics,
                 "val_mse_loss": avg_val_mse,
                 "val_physics_loss": avg_val_physics,
-                "a": a,
+                "lp_weight": float(criterion.lp_weight),
+                "mse_weight": float(criterion.mse_weight),
             }
             append_metrics_row(metrics_path, header, row)
             append_metrics_row(components_path, components_header, components_row)

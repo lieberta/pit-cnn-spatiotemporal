@@ -80,6 +80,9 @@ def render_frame(
     heat_threshold,
     viz_gamma,
     style_cmap,
+    voxel_alpha_base,
+    voxel_alpha_scale,
+    voxel_alpha_gamma,
 ):
     # Downsample to keep rendering practical for long videos.
     t = temp_3d[::downsample, ::downsample, ::downsample]
@@ -100,7 +103,11 @@ def render_frame(
             rgba[..., 1] = 0.92 * (1.0 - h_col)
             rgba[..., 2] = 0.0
             # Hotter cells are less transparent (more opaque) than cooler cells.
-            rgba[..., 3] = np.clip(0.06 + 0.86 * np.power(h0, 0.70), 0.06, 0.98)
+            rgba[..., 3] = np.clip(
+                voxel_alpha_base + voxel_alpha_scale * np.power(h0, voxel_alpha_gamma),
+                0.0,
+                1.0,
+            )
             facecolors[filled] = rgba[filled]
 
         # Mark heat sources with explicit opaque source core + halo + short plume.
@@ -275,6 +282,9 @@ def make_video_for_experiment(
     style_cmap: str,
     assume_dt: float,
     last_frame_only: bool,
+    voxel_alpha_base: float,
+    voxel_alpha_scale: float,
+    voxel_alpha_gamma: float,
 ):
     loaded = load_field(exp_dir, normalized=normalized)
     if loaded is None:
@@ -355,6 +365,9 @@ def make_video_for_experiment(
             heat_threshold=heat_threshold,
             viz_gamma=viz_gamma,
             style_cmap=style_cmap,
+            voxel_alpha_base=voxel_alpha_base,
+            voxel_alpha_scale=voxel_alpha_scale,
+            voxel_alpha_gamma=voxel_alpha_gamma,
         )
         t_val = float(times_arr[t_idx]) if t_idx < len(times_arr) else float(t_idx)
         unit = "norm" if normalized else "C"
@@ -406,6 +419,9 @@ def make_video_for_experiment(
                 heat_threshold=heat_threshold,
                 viz_gamma=viz_gamma,
                 style_cmap=style_cmap,
+                voxel_alpha_base=voxel_alpha_base,
+                voxel_alpha_scale=voxel_alpha_scale,
+                voxel_alpha_gamma=voxel_alpha_gamma,
             )
             t_val = float(times_arr[t_idx]) if t_idx < len(times_arr) else float(t_idx)
             unit = "norm" if normalized else "C"
@@ -448,6 +464,9 @@ def main():
     parser.add_argument("--viz-vmax", type=float, default=5000.0, help="max temp for visualization (clips above), e.g. 5000")
     parser.add_argument("--viz-vmin", type=float, default=None, help="min temp for visualization (default=ambient)")
     parser.add_argument("--viz-gamma", type=float, default=1.6, help=">1 => more yellow, <1 => more red")
+    parser.add_argument("--voxel-alpha-base", type=float, default=0.06, help="base voxel alpha")
+    parser.add_argument("--voxel-alpha-scale", type=float, default=0.86, help="voxel alpha scaling")
+    parser.add_argument("--voxel-alpha-gamma", type=float, default=0.70, help="voxel alpha gamma on normalized heat")
     parser.add_argument("--cmap", type=str, default="YlOrRd", help="matplotlib colormap name, e.g. YlOrRd, autumn_r")
     parser.add_argument("--assume-dt", type=float, default=0.001, help="seconds per timestep if time axis is plain indices")
     parser.add_argument("--elev", type=float, default=25.0)
@@ -504,6 +523,9 @@ def main():
             style_cmap=args.cmap,
             assume_dt=max(1e-12, args.assume_dt),
             last_frame_only=args.last_frame_only,
+            voxel_alpha_base=max(0.0, min(1.0, args.voxel_alpha_base)),
+            voxel_alpha_scale=max(0.0, min(1.0, args.voxel_alpha_scale)),
+            voxel_alpha_gamma=max(1e-6, args.voxel_alpha_gamma),
         )
 
 
