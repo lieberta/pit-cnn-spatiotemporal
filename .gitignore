@@ -5,3 +5,5 @@ logs
 ignore
 __pycache__/
 *.pyc
+evaluation/predictions/
+terminal_output_main.log
