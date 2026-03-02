@@ -14,10 +14,9 @@ try:
 except ImportError:
     zarr = None
 
-'''
-This file contains the HeatSimulation class which simulates the heat equation with multiple fireplaces and saves the results.
-f64
-''' 
+"""
+Initial heat-equation simulator used for the baseline dynamic datasets.
+"""
 
 
 class Laplacian3D(nn.Module):
@@ -185,7 +184,7 @@ def run_experiment(num_fires, device):
 
 
 def load_runtime_config(config_path):
-    spec = importlib.util.spec_from_file_location("new_sim_config", config_path)
+    spec = importlib.util.spec_from_file_location("heat_sim_initial_config", config_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Could not load config from: {config_path}")
     module = importlib.util.module_from_spec(spec)

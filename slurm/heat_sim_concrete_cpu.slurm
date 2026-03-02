@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=new_heat_sim_cpu
+#SBATCH --job-name=heat_sim_concrete_cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -23,11 +23,10 @@ echo "Running on host: $(hostname)"
 echo "Python: $(which python)"
 echo "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-unset}"
 
-# Keep CPU math thread count aligned with assigned cores.
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 
-SIM_CONFIG="${SIM_CONFIG:-configs/new_sim_config.py}"
+SIM_CONFIG="${SIM_CONFIG:-configs/heat_sim_concrete_config.py}"
 echo "SIM_CONFIG=${SIM_CONFIG}"
 
-python -m simulation.heat_sim_initial --config "${SIM_CONFIG}"
+python -m simulation.heat_sim_concrete --config "${SIM_CONFIG}"
