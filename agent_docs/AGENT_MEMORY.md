@@ -96,7 +96,7 @@ Last updated: 2026-02-26
 - Dynamic run directories were archived under `runs/dynamic/pre-normsource-incident/` except `runs/dynamic/PITCNN_dynamic_f32_a=0`.
 
 ## Simulation/Data Notes (2026-02-26)
-- Simulation file for current dataset generation: `simulation/new_heat_sim_class.py` (not `new_sim_class.py`).
+- Simulation file for current dataset generation: `simulation/heat_sim_initial.py` (formerly `new_heat_sim_class.py`, not `new_sim_class.py`).
 - Source placement was adjusted to avoid boundaries:
   - fireplaces keep one-cell distance to x/y boundaries
   - initial hot zone and source term moved from `:2` to interior `z=1:3`
@@ -118,7 +118,7 @@ Last updated: 2026-02-26
   - the compared runs were not strictly apples-to-apples (`epochs`, seed, and code state differed).
 
 ## Physics Alignment Checklist (2026-02-26)
-- Simulator (`simulation/new_heat_sim_class.py`) currently uses:
+- Simulator (`simulation/heat_sim_initial.py`) currently uses:
   - explicit Euler: `u[n+1] = u[n] + alpha*dt*laplacian(u[n]) + dt*source`
   - geometry/time: `Nx,Ny,Nz=64,32,16`, `Lx,Ly,Lz=6.3,3.1,1.5`, so `dx=dy=dz=0.1`, `dt=0.001`.
   - constant Dirichlet boundaries set every step on all six faces.
@@ -140,3 +140,51 @@ Last updated: 2026-02-26
 - Keep dtype aligned end-to-end (model, dataset tensors, loss computations) using `configs/train_config.py`.
 - For cluster runs, avoid editing configs while jobs are queued/running unless job scheduling state is controlled (`hold/release`) to ensure reproducibility.
 - When resuming checkpoints after dtype changes, ensure optimizer-state recasting remains intact (already handled in `train_utils.py`).
+- User preference: avoid rare fallback paths as the default solution; prefer the direct, regular workflow unless a fallback is explicitly requested or necessary.
+
+## Working Preferences
+
+### Config-First, Explicit Behavior
+- Treat config files as the source of truth for critical training and runtime settings.
+- Do not add hidden code defaults for values that should come from project config.
+- Prefer explicit defaults in shared config files over hardcoded runtime defaults when users may tune the behavior.
+- Required config fields should be validated early and fail clearly if missing or invalid.
+- Validate config values as they are extracted, including type and range where relevant.
+- Keep behavior traceable to config, CLI, or explicit function arguments.
+- When merging CLI overrides into config-derived values, only apply explicitly provided CLI values; absent optional CLI args must not overwrite config values.
+- Keep top-level config ownership explicit across files to avoid silent key collisions.
+- Config-loading helpers should validate the expected shape and fail clearly on wrong structures.
+- Keep machine-local paths and environment-specific binaries in `.env` or environment variables, not in shared project configs.
+- If a CLI supports environment fallback for a required value, document precedence explicitly and fail with an error that names both sources.
+
+### Keep It Minimal
+- Implement the smallest correct solution that satisfies the requirement.
+- Prefer extending existing code paths over adding parallel flows.
+- Remove superseded code when replacing behavior.
+- Do not add feature flags, compatibility shims, or alternate modes unless explicitly required.
+
+### Work in Small Steps
+- Do not change large parts of the training pipeline, config handling, and run artifacts all at once.
+- Finish one coherent change at a time, validate it, then move to the next change.
+- For larger refactors, keep phases small enough that each step can be checked against actual project artifacts such as `config.json`, `metrics.csv`, checkpoints, and SLURM submission flow.
+
+### Validate Continuously
+- With each meaningful code change, run the smallest relevant validation step available.
+- Prefer targeted validation first, for example syntax checks, config loading, a focused script run, or inspection of produced run artifacts.
+- Do not continue stacking changes on top of known failures; fix the failure before moving on.
+- When changing artifact schema, CLI behavior, or config fields, update implementation and the relevant docs in the same change to avoid drift.
+
+### Review and Simplify
+- After making a change work, do a short simplification pass.
+- Check for regressions, stale assumptions, edge cases, nondeterministic behavior, and resume-training compatibility issues.
+- Compare the implemented behavior against the intended training workflow and close any obvious gaps before moving on.
+
+## Coding Style and Comments
+- Prefer clear, explicit code over clever shortcuts.
+- Keep naming precise and behavior-oriented.
+- Add comments where intent, invariants, or non-obvious behavior need explanation; do not add comments that merely restate syntax.
+- Use docstrings for outward-facing helpers, public utilities, training/config helpers, and non-trivial classes when they benefit readability.
+- Keep code comments and docstrings runtime-oriented; they should describe behavior and invariants, not planning phases or private workflow notes.
+- Define abbreviations on first use in docs or code comments when the meaning may not be obvious in this project context.
+- Add durable project terms or recurring abbreviations to `GLOSSARY.md` when that file exists and is actively used.
+- Prefer normal top-level imports by default; use lazy imports only when there is a concrete benefit such as heavy optional dependencies, startup cost, or better testability.

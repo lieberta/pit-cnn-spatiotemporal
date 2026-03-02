@@ -16,17 +16,16 @@ git push
 
 ~~~Slurm (sbatch)~~~
 
-Simulation (new_sim):
+Simulation (heat_sim_initial):
 
 sbatch -J "new_sim_cpu" slurm/new_heat_sim_class_cpu.slurm
 sbatch -J "new_sim_cpu" --export=ALL,SIM_CONFIG=configs/new_sim_config.py slurm/new_heat_sim_class_cpu.slurm
 
 Training: 
 
-sbatch -J "dyn64" --export=ALL,TRAIN_CONFIG=configs/pitcnn_dynamic_config.py slurm/main.slurm
-sbatch -J "dyn_phys_only" --export=ALL,TRAIN_CONFIG=configs/pitcnn_dynamic_config.py slurm/main.slurm  # set mse_weight=0.0 in config
-sbatch -J "timefirst64" --export=ALL,TRAIN_CONFIG=configs/pitcnn_timefirst_config.py slurm/main.slurm
-sbatch -J "static64" --export=ALL,TRAIN_CONFIG=configs/picnn_static_config.py slurm/main.slurm
+sbatch -J "dyn" --export=ALL,TRAIN_CONFIG=configs/pitcnn_dynamic_config.py slurm/main.slurm
+sbatch -J "timefirst" --export=ALL,TRAIN_CONFIG=configs/pitcnn_timefirst_config.py slurm/main.slurm
+sbatch -J "static" --export=ALL,TRAIN_CONFIG=configs/picnn_static_config.py slurm/main.slurm
 
 sbatch -J "pinn" slurm/pinn.slurm
 
@@ -49,6 +48,9 @@ sbatch -J "viz_quick_25" --export=ALL,EXPERIMENT=experiment_25_20260223_145422,O
 sbatch -J "viz9_voxel_full" \
   --export=ALL,EXPERIMENT=experiment_9_20260220_134208_000,STYLE=voxel,SOURCE_MARKER_MODE=none,DOWNSAMPLE=1,THRESHOLD_QUANTILE=0.60,HEAT_THRESHOLD=0.04,FRAME_STRIDE=1,MAX_FRAMES=0,SAVE_FRAMES_EVERY=10 \
   slurm/visualize_heatvid_3d.slurm
+
+
+sbatch -J "viz_25_video_opaque" --export=ALL,EXPERIMENT=experiment_25_20260223_145422,OUT_ROOT=/beegfs/home/l/lieberta/projects/physics-enhanced-cnn/plots/new_detailed_heat_sim_f64_3d,LAST_FRAME_ONLY=1,THRESHOLD_QUANTILE=0.50,HEAT_THRESHOLD=0.01,VIZ_VMAX=5000,VOXEL_ALPHA_BASE=0.18,VOXEL_ALPHA_SCALE=0.82,VOXEL_ALPHA_GAMMA=0.55 slurm/visualize_heatvid_3d.slurm
 
 General:
 
