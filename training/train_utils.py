@@ -94,3 +94,24 @@ def accumulate_training_duration(config_path, additional_seconds):
         return False
 
     return True
+
+
+def update_run_config(config_path, updates):
+    if not os.path.exists(config_path):
+        return False
+
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    config.update(updates)
+
+    try:
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+    except OSError:
+        return False
+
+    return True

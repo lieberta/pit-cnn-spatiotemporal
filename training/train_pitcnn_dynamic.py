@@ -1,6 +1,7 @@
 import math
 import os
 import time
+import json
 
 import matplotlib.pyplot as plt
 import torch
@@ -9,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .loss import CombinedLoss_dynamic
-from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration
+from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
 from configs.train_config import TRAIN_DTYPE
 
 SIM_TOTAL_SECONDS = 10.0
@@ -71,6 +72,22 @@ class BaseModel_dynamic(nn.Module):
             max_temp=max_temp,
         ).to(device=device, dtype=TRAIN_DTYPE)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        model_dir = os.path.join(save_path, model_name)
+        config_path = os.path.join(model_dir, "config.json")
+
+        best_val_mse = None
+        best_val_physics = None
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    run_config = json.load(f)
+                if run_config.get("best_val_mse_loss") is not None:
+                    best_val_mse = float(run_config["best_val_mse_loss"])
+                if run_config.get("best_val_physics_loss") is not None:
+                    best_val_physics = float(run_config["best_val_physics_loss"])
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                best_val_mse = None
+                best_val_physics = None
 
         start_epoch = 0
         if resume_checkpoint_path:
@@ -159,7 +176,6 @@ class BaseModel_dynamic(nn.Module):
             avg_val_mse = val_mse / len(val_loader)
             avg_val_physics = val_physics / len(val_loader)
 
-            model_dir = os.path.join(save_path, model_name)
             os.makedirs(model_dir, exist_ok=True)
             metrics_path = os.path.join(model_dir, "metrics.csv")
             components_path = os.path.join(model_dir, "loss_components.csv")
@@ -198,6 +214,15 @@ class BaseModel_dynamic(nn.Module):
             }
             append_metrics_row(metrics_path, header, row)
             append_metrics_row(components_path, components_header, components_row)
+            best_val_mse = avg_val_mse if best_val_mse is None else min(best_val_mse, avg_val_mse)
+            best_val_physics = avg_val_physics if best_val_physics is None else min(best_val_physics, avg_val_physics)
+            update_run_config(
+                config_path,
+                {
+                    "best_val_mse_loss": float(best_val_mse),
+                    "best_val_physics_loss": float(best_val_physics),
+                },
+            )
             self.save_model(epoch, model_name, save_path, optimizer)
 
         metrics_path = os.path.join(save_path, model_name, "metrics.csv")
@@ -207,7 +232,6 @@ class BaseModel_dynamic(nn.Module):
 
         self.save_loss_plot(model_name, epochs_all, train_losses_all, val_losses_all, save_path)
         proc_time = self.save_proc_time(model_name, tic, save_path)
-        config_path = os.path.join(save_path, model_name, "config.json")
         accumulate_training_duration(config_path, proc_time)
 
     def save_model(self, epoch, model_name, save_path, optimizer):
