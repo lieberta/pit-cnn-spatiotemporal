@@ -10,6 +10,13 @@ import numpy as np
 import torch
 
 from configs.train_config import TRAIN_DTYPE
+from data import (
+    SECONDS_PER_STEP,
+    list_experiment_folders,
+    load_normalization_values,
+    load_temperature_full,
+    resolve_temperature_store,
+)
 from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
 from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
 
@@ -75,11 +82,6 @@ def load_model(model_class_name: str, channels: int, checkpoint_path: Path, devi
         model.load_state_dict(checkpoint)
     model.eval()
     return model
-
-
-def list_experiments(base_path: Path):
-    return sorted([p for p in base_path.iterdir() if p.is_dir() and p.name.startswith("experiment")])
-
 
 def parse_times(times_str: str):
     out = []
@@ -171,7 +173,7 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark dynamic model inference runtime and compare with simulation runtime.")
     parser.add_argument("--run", required=True, help="run_id | dynamic model group name | direct .pth path")
     parser.add_argument("--runs-root", default="./runs/dynamic")
-    parser.add_argument("--test-base-path", default="./data/testset")
+    parser.add_argument("--test-base-path", default="./data/new_detailed_heat_sim_f64")
     parser.add_argument("--out-dir", default="./plots/inference_benchmark")
 
     parser.add_argument("--model-class", default=None, help="override model class")
@@ -181,7 +183,7 @@ def main():
     parser.add_argument("--min-seconds", type=float, default=1.0)
     parser.add_argument("--max-seconds", type=float, default=20.0)
     parser.add_argument("--step-seconds", type=float, default=1.0)
-    parser.add_argument("--seconds-per-step", type=float, default=0.1)
+    parser.add_argument("--seconds-per-step", type=float, default=float(SECONDS_PER_STEP))
 
     parser.add_argument("--max-experiments", type=int, default=None)
     parser.add_argument("--warmup", type=int, default=5)
@@ -216,7 +218,8 @@ def main():
     if not times:
         raise ValueError("No evaluation times specified.")
 
-    experiments = list_experiments(Path(args.test_base_path))
+    min_temp, _, temp_range = load_normalization_values(args.test_base_path)
+    experiments = [Path(p) for p in sorted(list_experiment_folders(args.test_base_path))]
     if args.max_experiments is not None:
         experiments = experiments[: max(0, args.max_experiments)]
     if not experiments:
@@ -230,11 +233,12 @@ def main():
     rows = []
     with torch.no_grad():
         for exp in experiments:
-            npz_path = exp / "normalized_heat_equation_solution.npz"
-            if not npz_path.exists():
-                print(f"[skip] missing normalized file: {npz_path}")
+            store_path = resolve_temperature_store(str(exp))
+            if store_path is None:
+                print(f"[skip] missing temperature store: {exp}")
                 continue
-            temp = np.load(npz_path)["temperature"]
+
+            temp = load_temperature_full(store_path, min_temp, temp_range)
             nt = temp.shape[0]
 
             input0 = torch.tensor(temp[0], dtype=TRAIN_DTYPE, device=device).unsqueeze(0).unsqueeze(0)

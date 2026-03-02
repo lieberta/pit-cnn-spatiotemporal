@@ -10,39 +10,29 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 
-from configs.train_config import TRAIN_DTYPE
-from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
-from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
+try:
+    import zarr
+except ImportError:
+    zarr = None
 
-# 
+from data import (
+    SECONDS_PER_STEP,
+    list_experiment_folders,
+    load_normalization_values,
+    load_temperature_full,
+    resolve_temperature_store,
+)
 
-MODEL_REGISTRY = {
-    "PITCNN_dynamic": PITCNN_dynamic,
-    "PITCNN_dynamic_batchnorm": PITCNN_dynamic_batchnorm,
-    "PITCNN_dynamic_latenttime1": PITCNN_dynamic_latenttime1,
-    "PITCNN_dynamic_timefirst": PITCNN_dynamic_timefirst,
-}
-
-
-def list_experiment_dirs(base_path: Path):
-    return sorted([p for p in base_path.iterdir() if p.is_dir() and p.name.startswith("experiment")])
+def denormalize(arr, min_temp, temp_range):
+    return arr * temp_range + min_temp
 
 
-def load_normalization(base_path: Path):
-    norm_path = base_path / "normalization_values.json"
-    if not norm_path.exists():
-        return None, None
-    with norm_path.open("r") as f:
-        norm = json.load(f)
-    return float(norm["min_temp"]), float(norm["max_temp"])
-
-
-def denormalize(arr, min_temp, max_temp):
-    if min_temp is None or max_temp is None:
-        return arr
-    return arr * (max_temp - min_temp) + min_temp
+def load_prediction_temperature(store_path: Path):
+    if zarr is None:
+        raise ImportError("zarr is required to read prediction stores. Install with: pip install zarr")
+    root = zarr.open_group(str(store_path), mode="r")
+    return np.asarray(root["temperature"])
 
 
 def load_run_config(run_dir: Path):
@@ -78,21 +68,6 @@ def resolve_dynamic_run(identifier: str, runs_root: Path):
                 return run_dir.name, ckpt, run_dir
 
     raise FileNotFoundError(f"Could not resolve run from identifier '{identifier}' under '{runs_root}'.")
-
-
-def load_model(model_class_name: str, channels: int, checkpoint_path: Path, device: torch.device):
-    if model_class_name not in MODEL_REGISTRY:
-        raise ValueError(f"Unsupported model class '{model_class_name}'. Available: {list(MODEL_REGISTRY.keys())}")
-
-    model = MODEL_REGISTRY[model_class_name](c=channels).to(device=device, dtype=TRAIN_DTYPE)
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        model.load_state_dict(checkpoint["model_state_dict"])
-    else:
-        model.load_state_dict(checkpoint)
-    model.eval()
-    return model
-
 
 def pick_fire_slice_y(input0_3d: np.ndarray):
     # Fire region is near z=0 with elevated temp at t=0.
@@ -221,75 +196,92 @@ def write_video(frame_paths, out_video_path: Path, fps: int):
 
 
 def evaluate_dynamic_horizon(
-    model,
     test_base_path: Path,
+    prediction_root: Path,
     out_dir: Path,
     seconds_per_step: float,
     min_seconds: float,
     max_seconds: float,
     eval_stride: int,
-    device: torch.device,
     make_video: bool,
     video_experiment_idx: int,
     video_fps: int,
 ):
-    min_temp, max_temp = load_normalization(test_base_path)
-    experiments = list_experiment_dirs(test_base_path)
+    min_temp, _, temp_range = load_normalization_values(str(test_base_path))
+    experiments = [Path(p) for p in sorted(list_experiment_folders(str(test_base_path)))]
 
     manifest_rows = []
     eligible = []
     for exp in experiments:
-        npz_path = exp / "normalized_heat_equation_solution.npz"
-        if not npz_path.exists():
+        store_path = resolve_temperature_store(str(exp))
+        if store_path is None:
             continue
-        arr = np.load(npz_path)["temperature"]
+        arr = load_temperature_full(store_path, min_temp, temp_range)
         max_t = (arr.shape[0] - 1) * seconds_per_step
         row = {"experiment": exp.name, "n_steps": int(arr.shape[0]), "max_seconds": float(max_t)}
         manifest_rows.append(row)
         if max_t >= min_seconds:
-            eligible.append(exp)
+            eligible.append((exp, store_path))
 
     write_csv(out_dir / "manifest.csv", manifest_rows, ["experiment", "n_steps", "max_seconds"])
     if not eligible:
         raise RuntimeError(f"No experiment reaches min_seconds={min_seconds}. See {out_dir / 'manifest.csv'}")
 
     rows = []
+    per_experiment_summary_rows = []
     frame_paths = []
+    total_predictions = 0
 
-    with torch.no_grad():
-        for exp_idx, exp in enumerate(eligible):
-            npz_path = exp / "normalized_heat_equation_solution.npz"
-            temp = np.load(npz_path)["temperature"]  # [nt, nx, ny, nz]
-            nt = temp.shape[0]
+    for exp_idx, (exp, store_path) in enumerate(eligible):
+        gt_norm = load_temperature_full(store_path, min_temp, temp_range)
+        nt = gt_norm.shape[0]
+        y_slice = pick_fire_slice_y(gt_norm[0])
 
-            input0 = torch.tensor(temp[0], dtype=TRAIN_DTYPE, device=device).unsqueeze(0).unsqueeze(0)
-            y_slice = pick_fire_slice_y(temp[0])
+        pred_path = prediction_root / "predictions" / exp.name / "heat_equation_solution.zarr"
+        if not pred_path.exists():
+            continue
 
-            end_idx = min(nt - 1, int(round(max_seconds / seconds_per_step)))
-            for t_idx in range(1, end_idx + 1, eval_stride):
-                t_seconds = t_idx * seconds_per_step
-                t_tensor = torch.tensor([[t_seconds]], dtype=TRAIN_DTYPE, device=device)
+        pred_den_all = load_prediction_temperature(pred_path)
 
-                pred = model(input0, t_tensor).detach().cpu().numpy()[0, 0]
-                gt = temp[t_idx]
+        if pred_den_all.shape[0] != nt:
+            raise ValueError(
+                f"Prediction timestep count mismatch for '{exp.name}': "
+                f"pred={pred_den_all.shape[0]} vs gt={nt}."
+            )
 
-                pred_den = denormalize(pred, min_temp, max_temp)
-                gt_den = denormalize(gt, min_temp, max_temp)
-                m = metrics(pred_den, gt_den)
-                m.update({
-                    "experiment": exp.name,
-                    "experiment_idx": exp_idx,
-                    "t_idx": t_idx,
-                    "t_seconds": round(float(t_seconds), 6),
-                })
-                rows.append(m)
+        experiment_predictions = 0
+        end_idx = min(nt - 1, int(round(max_seconds / seconds_per_step)))
+        for t_idx in range(1, end_idx + 1, eval_stride):
+            t_seconds = t_idx * seconds_per_step
+            gt_den = denormalize(gt_norm[t_idx], min_temp, temp_range)
+            pred_den = pred_den_all[t_idx]
+            total_predictions += 1
+            experiment_predictions += 1
 
-                if make_video and exp_idx == video_experiment_idx:
-                    abs_err = np.abs(pred_den - gt_den)
-                    frame_path = out_dir / "frames" / f"frame_{t_idx:04d}.png"
-                    frame_path.parent.mkdir(parents=True, exist_ok=True)
-                    render_triplet_frame(gt_den, pred_den, abs_err, y_slice, t_seconds, exp.name, frame_path)
-                    frame_paths.append(frame_path)
+            m = metrics(pred_den, gt_den)
+            m.update({
+                "experiment": exp.name,
+                "experiment_idx": exp_idx,
+                "t_idx": t_idx,
+                "t_seconds": round(float(t_seconds), 6),
+            })
+            rows.append(m)
+
+            if make_video and exp_idx == video_experiment_idx:
+                abs_err = np.abs(pred_den - gt_den)
+                frame_path = out_dir / "frames" / f"frame_{t_idx:04d}.png"
+                frame_path.parent.mkdir(parents=True, exist_ok=True)
+                render_triplet_frame(gt_den, pred_den, abs_err, y_slice, t_seconds, exp.name, frame_path)
+                frame_paths.append(frame_path)
+
+        # This summary is now about loaded prediction coverage, not runtime.
+        per_experiment_summary_rows.append(
+            {
+                "experiment": exp.name,
+                "experiment_idx": exp_idx,
+                "num_predictions": experiment_predictions,
+            }
+        )
 
     fieldnames = [
         "experiment", "experiment_idx", "t_idx", "t_seconds",
@@ -301,7 +293,17 @@ def evaluate_dynamic_horizon(
     write_csv(
         out_dir / "aggregate_by_time.csv",
         agg_rows,
-        ["t_seconds", "n", "mae_mean", "mae_std", "rmse_mean", "rmse_std", "maxae_mean", "rel_l2_mean"],
+        [
+            "t_seconds", "n",
+            "mae_mean", "mae_std",
+            "rmse_mean", "rmse_std",
+            "maxae_mean", "rel_l2_mean",
+        ],
+    )
+    write_csv(
+        out_dir / "per_experiment_summary.csv",
+        per_experiment_summary_rows,
+        ["experiment", "experiment_idx", "num_predictions"],
     )
     plot_metric_curves(agg_rows, out_dir)
 
@@ -310,25 +312,35 @@ def evaluate_dynamic_horizon(
         if not mp4_ok:
             write_video(frame_paths, out_dir / "prediction_vs_gt.gif", fps=video_fps)
 
+    summary = {
+        "eligible_experiments": len(eligible),
+        "total_predictions": int(total_predictions),
+        "prediction_root": str(prediction_root),
+    }
+    with (out_dir / "summary.json").open("w") as f:
+        json.dump(summary, f, indent=2)
+
     print(f"[done] Eligible experiments: {len(eligible)}")
     print(f"[done] Results: {out_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate dynamic PITCNN models over long horizons and create plots/videos.")
+        description="Evaluate saved dynamic-model predictions over long horizons and create plots/videos.")
     parser.add_argument("--run", required=True, help="Run ID, model group under runs/dynamic, or direct .pth path")
     parser.add_argument("--runs-root", default="./runs/dynamic")
-    parser.add_argument("--test-base-path", default="./data/testset")
+    parser.add_argument("--test-base-path", default="./data/new_detailed_heat_sim_f64")
     parser.add_argument("--out-dir", default="./plots/evaluation_horizon")
+    parser.add_argument(
+        "--prediction-root",
+        default="./evaluation/predictions",
+        help="Root directory containing saved predictions, typically from evaluation/predict_dynamic_testset.py.",
+    )
 
-    parser.add_argument("--seconds-per-step", type=float, default=0.1, help="time delta represented by one index step")
+    parser.add_argument("--seconds-per-step", type=float, default=float(SECONDS_PER_STEP), help="time delta represented by one index step")
     parser.add_argument("--min-seconds", type=float, default=20.0, help="only evaluate experiments that reach at least this horizon")
     parser.add_argument("--max-seconds", type=float, default=20.0, help="evaluate up to this horizon")
     parser.add_argument("--eval-stride", type=int, default=1, help="evaluate every n-th timestep")
-
-    parser.add_argument("--channels", type=int, default=None, help="override channels if not found in run config")
-    parser.add_argument("--model-class", type=str, default=None, help="override model class if not found in run config")
 
     parser.add_argument("--video", action="store_true", help="export frame sequence + video for one example experiment")
     parser.add_argument("--video-experiment-idx", type=int, default=0)
@@ -336,49 +348,42 @@ def main():
 
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     run_id, ckpt_path, run_dir = resolve_dynamic_run(args.run, Path(args.runs_root))
     cfg = load_run_config(run_dir)
 
-    model_class_name = args.model_class or cfg.get("model_class")
-    channels = args.channels if args.channels is not None else cfg.get("channels")
-
-    if model_class_name is None:
-        raise ValueError("Could not determine model class. Pass --model-class or ensure config.json has 'model_class'.")
-    if channels is None:
-        raise ValueError("Could not determine channels. Pass --channels or ensure config.json has 'channels'.")
-
-    model = load_model(model_class_name, int(channels), ckpt_path, device)
-
     out_dir = Path(args.out_dir) / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
+    model_name = cfg.get("name") or cfg.get("model_class") or run_id
+    prediction_root = Path(args.prediction_root) / model_name / run_id
+    if not prediction_root.exists():
+        raise FileNotFoundError(
+            f"Prediction directory not found: {prediction_root}. "
+            f"Run evaluation/predict_dynamic_testset.py first."
+        )
 
     run_meta = {
         "run_id": run_id,
         "checkpoint": str(ckpt_path),
         "run_dir": str(run_dir),
-        "model_class": model_class_name,
-        "channels": int(channels),
-        "dtype": str(TRAIN_DTYPE),
-        "device": str(device),
+        "model_class": cfg.get("model_class"),
+        "channels": cfg.get("channels"),
         "seconds_per_step": args.seconds_per_step,
         "min_seconds": args.min_seconds,
         "max_seconds": args.max_seconds,
         "eval_stride": args.eval_stride,
+        "prediction_root": str(prediction_root),
     }
     with (out_dir / "eval_config.json").open("w") as f:
         json.dump(run_meta, f, indent=2)
 
     evaluate_dynamic_horizon(
-        model=model,
         test_base_path=Path(args.test_base_path),
+        prediction_root=prediction_root,
         out_dir=out_dir,
         seconds_per_step=args.seconds_per_step,
         min_seconds=args.min_seconds,
         max_seconds=args.max_seconds,
         eval_stride=max(1, args.eval_stride),
-        device=device,
         make_video=args.video,
         video_experiment_idx=max(0, args.video_experiment_idx),
         video_fps=max(1, args.video_fps),

@@ -6,7 +6,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# old plot python file
+try:
+    import zarr
+except ImportError:
+    zarr = None
+
+
 def create_subfolder(folder_path: Path, subfolder_name: str):
     subfolder_path = folder_path / subfolder_name
     subfolder_path.mkdir(parents=True, exist_ok=True)
@@ -28,14 +33,23 @@ def find_fire_slice_y(temp_t0):
 
 
 def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, vmax_clip: float):
-    npz_file_path = experiment_folder / npz_name
-    if not npz_file_path.exists():
-        print(f"[skip] missing file: {npz_file_path}")
-        return
-
-    data = np.load(npz_file_path)
-    time_axis = data["time"] if "time" in data.files else np.arange(data["temperature"].shape[0], dtype=np.float64)
-    temperature = data["temperature"]
+    store_path = experiment_folder / npz_name
+    if store_path.suffix == ".zarr":
+        if not store_path.exists():
+            print(f"[skip] missing file: {store_path}")
+            return
+        if zarr is None:
+            raise ImportError("zarr is required to read .zarr stores. Install with: pip install zarr")
+        root = zarr.open_group(str(store_path), mode="r")
+        temperature = np.asarray(root["temperature"])
+        time_axis = np.asarray(root["time"]) if "time" in root else np.arange(temperature.shape[0], dtype=np.float64)
+    else:
+        if not store_path.exists():
+            print(f"[skip] missing file: {store_path}")
+            return
+        data = np.load(store_path)
+        time_axis = data["time"] if "time" in data.files else np.arange(data["temperature"].shape[0], dtype=np.float64)
+        temperature = data["temperature"]
 
     global_min_temp = float(np.min(temperature))
     global_max_temp = float(np.max(temperature)) if vmax_clip <= 0 else min(float(np.max(temperature)), vmax_clip)
@@ -69,15 +83,15 @@ def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, v
 
 def main():
     parser = argparse.ArgumentParser(description="Plot x-z room slices for one or all experiments.")
-    parser.add_argument("--base-path", default="./data/testset_20s")
-    parser.add_argument("--experiment", default=None, help="optional exact experiment folder name")
-    parser.add_argument("--normalized", action="store_true", help="use normalized npz instead of raw")
+    parser.add_argument("--base-path", default="./data/testdummy")
+    parser.add_argument("--experiment", default="experiment_15_20260223_140219", help="optional exact experiment folder name")
+    parser.add_argument("--normalized", action="store_true", help="use normalized store instead of raw")
     parser.add_argument("--step-every", type=int, default=10, help="render every n-th stored timestep")
     parser.add_argument("--vmax-clip", type=float, default=500.0, help="<=0 disables clip")
     args = parser.parse_args()
 
     base = Path(args.base_path)
-    npz_name = "normalized_heat_equation_solution.npz" if args.normalized else "heat_equation_solution.npz"
+    npz_name = "normalized_heat_equation_solution.zarr" if args.normalized else "heat_equation_solution.zarr"
 
     if args.experiment:
         experiment_dirs = [base / args.experiment]
