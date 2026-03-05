@@ -36,8 +36,41 @@ sbatch -J "gen20s" \
   --export=ALL,OUT_ROOT=./data/testset_20s,FIRES_MIN=1,FIRES_MAX=10,EXPERIMENTS_PER_FIRE=1,SIM_TIME_SECONDS=20,NT=20000,SAVE_EVERY=100,NORMALIZE=1 \
   slurm/generate_testset.slurm
 
+Predictions:
+
+sbatch -J "pred_runid" \
+  --export=ALL,RUN_ID=dynamic_20260302-162917_6b06f9,TESTSET_NAME=testset_20s \
+  slurm/predict_dynamic_testset.slurm
+
+sbatch -J "pred_modeldir" \
+  --export=ALL,MODEL_DIR=./runs/dynamic/PITCNN_dynamic_f32_lr=0.0001_V0.3/dynamic_20260302-162917_6b06f9,TESTSET_NAME=testset_20s \
+  slurm/predict_dynamic_testset.slurm
+
+sbatch -J "pred_custom_data_root" \
+  --export=ALL,MODEL_DIR=./runs/dynamic/PITCNN_dynamic_f32_lr=0.0001_V0.3/dynamic_20260302-162917_6b06f9,DATA_ROOT=./data,TESTSET_NAME=testset_20s,TIME_STRIDE=10 \
+  slurm/predict_dynamic_testset.slurm
+
+sbatch -J "pred_smollds_161748" \
+  --export=ALL,RUN_ID=dynamic_20260227-161748_d1a417,TESTSET_NAME=TESTSET_DT=0.001_T=15.0 \
+  slurm/predict_dynamic_testset.slurm
+
+sbatch -J "pred_smollds_184422" \
+  --export=ALL,RUN_ID=dynamic_20260227-184422_1b1203,TESTSET_NAME=TESTSET_DT=0.001_T=15.0 \
+  slurm/predict_dynamic_testset.slurm
+
+sbatch -J "pred_little_161748" \
+  --export=ALL,RUN_ID=dynamic_20260227-161748_d1a417,TESTSET_NAME=testsetLITTLE \
+  slurm/predict_dynamic_testset.slurm
+
+sbatch -J "pred_little_184422" \
+  --export=ALL,RUN_ID=dynamic_20260227-184422_1b1203,TESTSET_NAME=testsetLITTLE \
+  slurm/predict_dynamic_testset.slurm
+
 Visualisierung:
 
+sbatch -J "slice15" \
+  --export=ALL,BASE_PATH=./data/testdummy,EXPERIMENT=experiment_15_20260223_140219,NORMALIZED=0 \
+  slurm/plot_room_slice_cpu.slurm
 
 sbatch -J "viz_newsim3d" --export=ALL,ALLOW_ALL_EXPERIMENTS=1,OUT_ROOT=/beegfs/home/l/lieberta/projects/physics-enhanced-cnn/plots/new_detailed_heat_sim_f64_3d slurm/visualize_heatvid_3d.slurm
 
