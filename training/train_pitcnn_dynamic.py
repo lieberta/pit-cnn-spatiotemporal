@@ -11,7 +11,6 @@ from tqdm import tqdm
 
 from .loss import CombinedLoss_dynamic
 from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
-from configs.train_config import TRAIN_DTYPE
 
 SIM_TOTAL_SECONDS = 10.0
 SIM_STEPS_PER_SECOND = 1000.0
@@ -41,8 +40,9 @@ class BaseModel_dynamic(nn.Module):
         tic = time.perf_counter()
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        train_dtype = torch.get_default_dtype()
         print("Device = " + device)
-        self.to(device=device, dtype=TRAIN_DTYPE)
+        self.to(device=device, dtype=train_dtype)
         
         train_losses = []
         val_losses = []
@@ -70,7 +70,7 @@ class BaseModel_dynamic(nn.Module):
             device=device,
             min_temp=min_temp,
             max_temp=max_temp,
-        ).to(device=device, dtype=TRAIN_DTYPE)
+        ).to(device=device, dtype=train_dtype)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         model_dir = os.path.join(save_path, model_name)
         config_path = os.path.join(model_dir, "config.json")
@@ -122,16 +122,25 @@ class BaseModel_dynamic(nn.Module):
             self.train()
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input_tuple, target) in enumerate(loop):
-                input, t = input_tuple
-                input = input.to(device, dtype=TRAIN_DTYPE)
-                t = t.to(device, dtype=TRAIN_DTYPE)
-                target = target.to(device, dtype=TRAIN_DTYPE)
+                input, t = input_tuple # input shape: (B, C_in, D, H, W), t shape: (B,1)
+                input = input.to(device, dtype=train_dtype)
+                t = t.to(device, dtype=train_dtype)
+                target = target.to(device, dtype=train_dtype)
 
-                delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=TRAIN_DTYPE)
+                # creates a tensor for delta_t to match tensor t
+                delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=train_dtype)
                 t_past = t - delta_t
                 output = self(input, t)
-                
-                output_past = self(input, t_past)
+                first_step_mask = torch.isclose(t, delta_t, rtol=0.0, atol=1e-6)  # creates bool-mask per batch-element (shape: (B,1)), True where t ≈ delta_t, so where t_past would be ≈ 0 (with a tolerance of 1e-6 to account for floating point precision issues)
+
+                output_past = self(input, t_past) # computes output_past for all samples
+
+                # For samples where t_past ≈ 0, we set output_past := input, because for the first simulation step the "past output" is just the initial condition (input).
+                if first_step_mask.any():  # check if there are any samples in the batch where t_past ≈ 0
+                    # Reshape mask from (B,1) to (B,1,1,1,1), so one bool controls one full sample volume.
+                    mask_5d = first_step_mask.view(t.shape[0], 1, 1, 1, 1)
+                    # torch.where picks input where mask is True, otherwise keeps model output_past.
+                    output_past = torch.where(mask_5d, input, output_past)
 
                 loss, mse_loss, physics_loss = criterion.compute_components(
                     input, output, output_past, t, t_past, target
@@ -154,14 +163,24 @@ class BaseModel_dynamic(nn.Module):
             with torch.no_grad():
                 for input_tuple, target in val_loader:
                     input, t = input_tuple
-                    input = input.to(device, dtype=TRAIN_DTYPE)
-                    t = t.to(device, dtype=TRAIN_DTYPE)
-                    target = target.to(device, dtype=TRAIN_DTYPE)
-
-                    delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=TRAIN_DTYPE)
+                    input = input.to(device, dtype=train_dtype)
+                    t = t.to(device, dtype=train_dtype)
+                    target = target.to(device, dtype=train_dtype)
+                    # creates a tensor for delta_t to match tensor t
+                    delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=train_dtype)
                     t_past = t - delta_t
                     output = self(input, t)
-                    output_past = self(input, t_past)
+
+                    first_step_mask = torch.isclose(t, delta_t, rtol=0.0, atol=1e-6)  # creates bool-mask per batch-element (shape: (B,1)), True where t ≈ delta_t, so where t_past would be ≈ 0 (with a tolerance of 1e-6 to account for floating point precision issues)
+
+                    output_past = self(input, t_past) # computes output_past for all samples
+
+                    # For samples where t_past ≈ 0, we set output_past := input, because for the first simulation step the "past output" is just the initial condition (input).
+                    if first_step_mask.any():  # check if there are any samples in the batch where t_past ≈ 0
+                        # Reshape mask from (B,1) to (B,1,1,1,1), so one bool controls one full sample volume.
+                        mask_5d = first_step_mask.view(t.shape[0], 1, 1, 1, 1)
+                        # torch.where picks input where mask is True, otherwise keeps model output_past.
+                        output_past = torch.where(mask_5d, input, output_past)
                     loss, mse_loss, physics_loss = criterion.compute_components(
                         input, output, output_past, t, t_past, target
                     )
