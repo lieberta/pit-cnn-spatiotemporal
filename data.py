@@ -6,16 +6,17 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from configs.train_config import TRAIN_DTYPE
-
 try:
     import zarr
 except ImportError:
     zarr = None
 
-NP_DTYPE = np.float64 if TRAIN_DTYPE == torch.float64 else np.float32
-SIM_STEPS_PER_SECOND = 1000.0
-SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND
+SIM_STEPS_PER_SECOND = 1000.0  # Fallback value if no dataset metadata file is available.
+SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND  # Fallback dt in seconds derived from fallback steps-per-second.
+
+
+def get_np_dtype():
+    return np.float64 if torch.get_default_dtype() == torch.float64 else np.float32
 
 
 def _require_zarr():
@@ -43,6 +44,22 @@ def load_normalization_values(base_path):
     if temp_range <= 0:
         raise ValueError(f"Invalid normalization range in '{norm_path}': min={min_temp}, max={max_temp}")
     return min_temp, max_temp, temp_range
+
+
+def load_time_grid_from_metadata(base_path, fallback_steps_per_second=SIM_STEPS_PER_SECOND):
+    meta_path = os.path.join(base_path, "trainset_metadata.json")  # Build the expected metadata path inside the dataset root.
+    if os.path.exists(meta_path):  # Prefer dataset-local metadata when available.
+        with open(meta_path, "r") as f:  # Open metadata file for parsing.
+            meta = json.load(f)  # Parse JSON metadata into a Python dict.
+        delta_t_seconds = float(meta["delta_t_seconds"])  # Read physical timestep size in seconds.
+        if delta_t_seconds <= 0.0:  # Guard against invalid/non-physical dt values.
+            raise ValueError(f"Invalid delta_t_seconds in '{meta_path}': {delta_t_seconds}")  # Fail early with clear context.
+        sim_steps_per_second = 1.0 / delta_t_seconds  # Convert dt to simulation steps-per-second.
+        num_timesteps = int(meta.get("num_timesteps")) if "num_timesteps" in meta else None  # Read total simulated steps if present.
+        return sim_steps_per_second, delta_t_seconds, num_timesteps  # Return resolved timing values from metadata.
+    sim_steps_per_second = float(fallback_steps_per_second)  # Use legacy fallback frequency if metadata is missing.
+    seconds_per_step = 1.0 / sim_steps_per_second  # Derive legacy dt from legacy frequency.
+    return sim_steps_per_second, seconds_per_step, None  # Return fallback timing values and unknown total timesteps.
 
 
 def normalize_temperature(data, min_temp, temp_range):
@@ -83,12 +100,13 @@ def load_temperature_full(path, min_temp, temp_range):
 class HeatEquationMultiDataset(Dataset):
     def __init__(self, base_path="./data/laplace_convolution/", predicted_time=3):
         min_temp, _, temp_range = load_normalization_values(base_path)
+        self.sim_steps_per_second, self.seconds_per_step, _ = load_time_grid_from_metadata(base_path)  # Load timing from metadata (or fallback) for correct time indexing.
         folders = list_experiment_folders(base_path)
 
         self.inputs = []
         self.targets = []
 
-        target_idx = int(predicted_time * SIM_STEPS_PER_SECOND)
+        target_idx = int(predicted_time * self.sim_steps_per_second)  # Convert requested prediction time (seconds) to discrete index.
         for folder in folders:
             store = resolve_temperature_store(folder)
             if store is None:
@@ -96,8 +114,8 @@ class HeatEquationMultiDataset(Dataset):
             data = load_temperature_full(store, min_temp, temp_range)
             if target_idx >= data.shape[0]:
                 continue
-            inputs = torch.tensor(data[0, :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0).unsqueeze(1)
-            targets = torch.tensor(data[target_idx, :, :, :], dtype=TRAIN_DTYPE).unsqueeze(0).unsqueeze(1)
+            inputs = torch.tensor(data[0, :, :, :], dtype=torch.get_default_dtype()).unsqueeze(0).unsqueeze(1)
+            targets = torch.tensor(data[target_idx, :, :, :], dtype=torch.get_default_dtype()).unsqueeze(0).unsqueeze(1)
             self.inputs.append(inputs)
             self.targets.append(targets)
 
@@ -158,10 +176,11 @@ class HeatEquationPINNDataset(Dataset):
         y = y_idx / max(1, ny - 1)
         z = z_idx / max(1, nz - 1)
 
-        coords = np.stack([x, y, z, t], axis=1).astype(NP_DTYPE)
-        target = data[t_idx, x_idx, y_idx, z_idx].astype(NP_DTYPE).reshape(-1, 1)
+        np_dtype = get_np_dtype()
+        coords = np.stack([x, y, z, t], axis=1).astype(np_dtype)
+        target = data[t_idx, x_idx, y_idx, z_idx].astype(np_dtype).reshape(-1, 1)
         source_mask = data[0, x_idx, y_idx, z_idx] > self.source_threshold_norm
-        source = np.where(source_mask, self.source_intensity_norm, 0.0).astype(NP_DTYPE).reshape(-1, 1)
+        source = np.where(source_mask, self.source_intensity_norm, 0.0).astype(np_dtype).reshape(-1, 1)
         return torch.from_numpy(coords), torch.from_numpy(target), torch.from_numpy(source)
 
 
@@ -188,6 +207,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self.use_index_cache = bool(use_index_cache)
         self.default_num_timesteps = int(default_num_timesteps)
         self.min_temp, self.max_temp, self.temp_range = load_normalization_values(base_path)
+        self.sim_steps_per_second, self.seconds_per_step, self.meta_num_timesteps = load_time_grid_from_metadata(base_path)  # Resolve dataset dt/frequency once for dynamic time tensors.
         # Number of selected experiment folders (tracked for run metadata).
         self.num_selected_experiments = 0
 
@@ -231,9 +251,10 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             input_np = temp_store[0, :, :, :]
             target_np = temp_store[predicted_time, :, :, :]
 
-        input_tensor = torch.tensor(input_np, dtype=TRAIN_DTYPE).unsqueeze(0)
-        target_tensor = torch.tensor(target_np, dtype=TRAIN_DTYPE).unsqueeze(0)
-        predicted_time_tensor = torch.tensor([predicted_time * SECONDS_PER_STEP], dtype=TRAIN_DTYPE)
+        dtype = torch.get_default_dtype()
+        input_tensor = torch.tensor(input_np, dtype=dtype).unsqueeze(0)
+        target_tensor = torch.tensor(target_np, dtype=dtype).unsqueeze(0)
+        predicted_time_tensor = torch.tensor([predicted_time * self.seconds_per_step], dtype=dtype)  # Convert integer timestep index to physical time in seconds.
         return (input_tensor, predicted_time_tensor), target_tensor
 
     def _index_cache_path(self):
@@ -302,6 +323,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
 
     @staticmethod
     def _read_num_timesteps(folder, store_path, default_num_timesteps):
+        # 1) Prefer per-experiment metadata when available (highest priority).
         metadata_path = os.path.join(folder, "metadata.json")
         if os.path.exists(metadata_path):
             try:
@@ -313,9 +335,27 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             except (OSError, ValueError, TypeError):
                 pass
 
+        # 2) Fallback to dataset-level metadata file:
+        #    <dataset_root>/trainset_metadata.json
+        #    where dataset_root is the parent of the experiment folder.
+        dataset_meta_path = os.path.join(os.path.dirname(folder), "trainset_metadata.json")
+        if os.path.exists(dataset_meta_path):
+            try:
+                with open(dataset_meta_path, "r") as f:
+                    dataset_meta = json.load(f)
+                dataset_num_timesteps = int(dataset_meta.get("num_timesteps", 0))
+                # num_timesteps is Nt in simulation terms; stored arrays have Nt + 1 frames.
+                # We return frame count here because predicted_time indexes into saved frames.
+                if dataset_num_timesteps > 0:
+                    return dataset_num_timesteps + 1
+            except (OSError, ValueError, TypeError):
+                pass
+
+        # 3) Keep backward-compatible config fallback.
         if default_num_timesteps > 1:
             return default_num_timesteps
 
+        # 4) Last resort: inspect array shape directly.
         if store_path.endswith(".zarr"):
             _require_zarr()
             return int(zarr.open_group(store_path, mode="r")["temperature"].shape[0])
