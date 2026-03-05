@@ -1,6 +1,6 @@
 import torch
 
-TRAIN_DTYPE = torch.float64
+train_dtype = torch.float64
 epochs = 10
 lr = 0.001
 a_list = [0, 1]

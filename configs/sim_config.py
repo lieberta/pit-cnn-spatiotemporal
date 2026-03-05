@@ -9,15 +9,18 @@ Example:
     T = 10.0, DT = 0.01  -> Nt = 1000 -> 1001 data points.
 """
 
-NUM_FIRES_LIST = [10,20,30]
-EXPERIMENTS_PER_FIRE_COUNT = 1
+NUM_FIRES_LIST = [15]
+EXPERIMENTS_PER_FIRE_COUNT = 100
 
 DATA_ROOT = "./data"
-DATASET_NAME = "TESTSET_DT=0.001_T=15.0"
+DATASET_NAME = "Equilibriumset_30s_dt0.001"
 
-T = 15.0
+T = 30.0
 DT = 0.001
 
 DEVICE = "auto"  # "auto", "cpu", or "cuda"
 INCLUDE_AXES = True
 CHUNK_T = 1
+
+
+# command: sbatch -J "new_sim_cpu" --export=ALL,SIM_CONFIG=configs/sim_config.py slurm/new_heat_sim_class_cpu.slurm
