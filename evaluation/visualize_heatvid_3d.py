@@ -61,6 +61,29 @@ def unique_video_path(path: Path) -> Path:
         i += 1
 
 
+def _prediction_out_dir(exp_dir: Path, out_root: Path) -> Optional[Path]:
+    """
+    Build a structured output path for prediction visualizations:
+    out_root/prediction/<model_name>/<run_name>/<experiment_name>
+    """
+    try:
+        parts = exp_dir.resolve().parts
+    except Exception:
+        return None
+
+    if "predictions" not in parts:
+        return None
+
+    pred_idx = parts.index("predictions")
+    # Expected shape: .../<model_name>/<run_name>/predictions/<testset>/<experiment_name>
+    if pred_idx < 2:
+        return None
+
+    model_name = parts[pred_idx - 2]
+    run_name = parts[pred_idx - 1]
+    return out_root / "prediction" / model_name / run_name / exp_dir.name
+
+
 def render_frame(
     ax,
     temp_3d,
@@ -339,7 +362,9 @@ def make_video_for_experiment(
     vmax_vis = float(viz_vmax)
     vmax_vis = max(vmax_vis, vmin_vis + 1e-6)
 
-    out_dir = out_root / exp_dir.name
+    out_dir = _prediction_out_dir(exp_dir=exp_dir, out_root=out_root)
+    if out_dir is None:
+        out_dir = out_root / exp_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if last_frame_only:

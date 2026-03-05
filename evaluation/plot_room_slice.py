@@ -20,7 +20,7 @@ def create_subfolder(folder_path: Path, subfolder_name: str):
 
 def find_fire_slice_y(temp_t0):
     found_fire = False
-    y_fire = 0
+    y_fire = 1
     for x_coord in range(temp_t0.shape[0]):
         for y_coord in range(temp_t0.shape[1]):
             if temp_t0[x_coord, y_coord, 0] > 21:
@@ -32,7 +32,7 @@ def find_fire_slice_y(temp_t0):
     return y_fire
 
 
-def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, vmax_clip: float):
+def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, vmax_clip: float, output_subdir: str):
     store_path = experiment_folder / npz_name
     if store_path.suffix == ".zarr":
         if not store_path.exists():
@@ -55,7 +55,7 @@ def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, v
     global_max_temp = float(np.max(temperature)) if vmax_clip <= 0 else min(float(np.max(temperature)), vmax_clip)
 
     y_fire = find_fire_slice_y(temperature[0])
-    plots_folder = create_subfolder(experiment_folder, "plots")
+    plots_folder = create_subfolder(experiment_folder, output_subdir)
 
     for timestep in range(temperature.shape[0]):
         if timestep % max(1, step_every) != 0:
@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--normalized", action="store_true", help="use normalized store instead of raw")
     parser.add_argument("--step-every", type=int, default=10, help="render every n-th stored timestep")
     parser.add_argument("--vmax-clip", type=float, default=500.0, help="<=0 disables clip")
+    parser.add_argument("--output-subdir", default="plots", help="subfolder inside the experiment folder")
     args = parser.parse_args()
 
     base = Path(args.base_path)
@@ -105,7 +106,13 @@ def main():
         if not exp.exists():
             print(f"[skip] experiment not found: {exp}")
             continue
-        render_experiment(exp, npz_name=npz_name, step_every=args.step_every, vmax_clip=args.vmax_clip)
+        render_experiment(
+            exp,
+            npz_name=npz_name,
+            step_every=args.step_every,
+            vmax_clip=args.vmax_clip,
+            output_subdir=args.output_subdir,
+        )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 import argparse
 import csv
 import json
-import shutil
 import time
 from pathlib import Path
 
@@ -14,7 +13,6 @@ try:
 except ImportError:
     zarr = None
 
-from configs.train_config import TRAIN_DTYPE
 from data import (
     SECONDS_PER_STEP,
     list_experiment_folders,
@@ -22,6 +20,7 @@ from data import (
     load_temperature_full,
     resolve_temperature_store,
 )
+from evaluation.plot_room_slice import render_experiment
 from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
 from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
 
@@ -34,6 +33,10 @@ MODEL_CLASS_REGISTRY = {
 }
 
 LEGACY_DYNAMIC_TRAIN_DATA_PATH = "./data/new_detailed_heat_sim_f64/"
+
+
+def get_run_dtype(run_cfg):
+    return torch.float64 if run_cfg.get("training_dtype") == "float64" else torch.float32
 
 
 def load_model_state(model, model_pth, device):
@@ -56,6 +59,18 @@ def find_run_dir_by_id(mode_root, run_id):
 
 
 def resolve_dynamic_run(model_name_or_run_id, runs_root):
+    candidate_path = Path(model_name_or_run_id)
+    if candidate_path.suffix == ".pth" and candidate_path.is_file():
+        run_dir = candidate_path.parent
+        run_id = run_dir.name
+        return run_id, run_dir, candidate_path
+    if candidate_path.is_dir():
+        run_dir = candidate_path
+        run_id = run_dir.name
+        model_pth = run_dir / f"{run_id}.pth"
+        if model_pth.exists():
+            return run_id, run_dir, model_pth
+
     mode_root = Path(runs_root)
     run_dir = find_run_dir_by_id(mode_root, model_name_or_run_id)
     if run_dir is not None:
@@ -83,6 +98,13 @@ def load_run_config(run_dir):
         return {}
     with config_path.open("r") as f:
         return json.load(f)
+
+
+def derive_testset_name(testset_path: str) -> str:
+    testset_dir = Path(testset_path)
+    if testset_dir.name:
+        return testset_dir.name
+    return testset_dir.resolve().parent.name
 
 
 def denormalize_array(array, min_temp, temp_range):
@@ -155,11 +177,17 @@ def main():
     parser.add_argument("--run", required=True, help="Run ID or model group name in runs/dynamic.")
     parser.add_argument("--runs-root", default="./runs/dynamic", help="Root folder containing dynamic runs.")
     parser.add_argument("--testset-path", default="./data/new_detailed_heat_sim_f64/", help="Path to test dataset.")
-    parser.add_argument("--out-root", default="./evaluation/predictions", help="Output root for predictions and metrics.")
+    parser.add_argument(
+        "--out-root",
+        default="./evaluation/predictions",
+        help="Deprecated. Predictions are always saved inside the resolved run directory.",
+    )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"], help="Inference device.")
     parser.add_argument("--max-experiments", type=int, default=None, help="Optional limit of evaluated experiments.")
     parser.add_argument("--experiment-offset", type=int, default=0, help="Skip first N experiment folders.")
     parser.add_argument("--time-stride", type=int, default=1, help="Evaluate every nth timestep.")
+    parser.add_argument("--plot-step-every", type=int, default=100, help="Render every n-th stored timestep after prediction (default 0.1s at dt=0.001).")
+    parser.add_argument("--plot-output-subdir", default="plots_room_slice", help="Plot subfolder inside each prediction experiment folder.")
     args = parser.parse_args()
 
     if args.time_stride < 1:
@@ -168,19 +196,20 @@ def main():
         raise ValueError("--experiment-offset must be >= 0")
 
     device = torch.device("cuda" if (args.device == "auto" and torch.cuda.is_available()) else args.device)
-    torch.set_default_dtype(TRAIN_DTYPE)
 
     run_id, run_dir, model_pth = resolve_dynamic_run(args.run, args.runs_root)
     if run_id is None:
         raise FileNotFoundError(f"Could not resolve run '{args.run}' in {args.runs_root}")
 
     run_cfg = load_run_config(run_dir)
+    train_dtype = get_run_dtype(run_cfg)
+    torch.set_default_dtype(train_dtype)
     model_class_name = run_cfg.get("model_class", "PITCNN_dynamic_latenttime1")
     channels = int(run_cfg.get("channels", 16))
     if model_class_name not in MODEL_CLASS_REGISTRY:
         raise ValueError(f"Unsupported model_class '{model_class_name}'. Available: {list(MODEL_CLASS_REGISTRY.keys())}")
 
-    model = MODEL_CLASS_REGISTRY[model_class_name](c=channels).to(device=device, dtype=TRAIN_DTYPE)
+    model = MODEL_CLASS_REGISTRY[model_class_name](c=channels).to(device=device, dtype=train_dtype)
     load_model_state(model, str(model_pth), device)
     model.eval()
 
@@ -191,13 +220,10 @@ def main():
     if args.max_experiments is not None:
         folders = folders[: args.max_experiments]
 
-    model_name = run_cfg.get("name") or model_class_name
-    out_dir = Path(args.out_root) / model_name / run_id
-    pred_dir = out_dir / "predictions"
+    testset_name = derive_testset_name(args.testset_path)
+    out_dir = Path(run_dir) / "predictions" / testset_name
+    pred_dir = out_dir
     pred_dir.mkdir(parents=True, exist_ok=True)
-    config_src = Path(run_dir) / "config.json"
-    if config_src.exists():
-        shutil.copy2(config_src, out_dir / "config.json")
 
     per_t_abs_sum = {}
     per_t_count = {}
@@ -222,7 +248,7 @@ def main():
 
         exp_name = Path(folder).name
         nt, nx, ny, nz = data_norm.shape
-        input0 = torch.tensor(data_norm[0], dtype=TRAIN_DTYPE, device=device).unsqueeze(0).unsqueeze(0)
+        input0 = torch.tensor(data_norm[0], dtype=train_dtype, device=device).unsqueeze(0).unsqueeze(0)
         pred_denorm = np.full((nt, nx, ny, nz), np.nan, dtype=np.float32)
         pred_denorm[0] = denormalize_array(data_norm[0], min_temp, temp_range).astype(np.float32)
 
@@ -238,7 +264,7 @@ def main():
         with torch.no_grad():
             for t_idx in range(1, nt, args.time_stride):
                 t_seconds = t_idx * SECONDS_PER_STEP
-                time_tensor = torch.tensor([[t_seconds]], dtype=TRAIN_DTYPE, device=device)
+                time_tensor = torch.tensor([[t_seconds]], dtype=train_dtype, device=device)
                 # Measure only the model forward pass so prediction runtime stays comparable.
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
@@ -259,7 +285,7 @@ def main():
                 exp_predictions += 1
                 exp_inference_seconds += float(inference_seconds)
 
-                target_norm_t = torch.tensor(data_norm[t_idx], dtype=TRAIN_DTYPE, device=device).unsqueeze(0).unsqueeze(0)
+                target_norm_t = torch.tensor(data_norm[t_idx], dtype=train_dtype, device=device).unsqueeze(0).unsqueeze(0)
                 pred_denorm_t = pred_norm_t * temp_range + min_temp
                 target_denorm_t = target_norm_t * temp_range + min_temp
 
@@ -287,6 +313,13 @@ def main():
         exp_out.mkdir(parents=True, exist_ok=True)
         time_axis, x_axis, y_axis, z_axis = load_axes_from_store(store, nt, nx, ny, nz)
         write_prediction_zarr(exp_out, pred_denorm, time_axis, x_axis, y_axis, z_axis)
+        render_experiment(
+            exp_out,
+            npz_name="heat_equation_solution.zarr",
+            step_every=args.plot_step_every,
+            vmax_clip=500.0,
+            output_subdir=args.plot_output_subdir,
+        )
 
         exp_mae = (exp_abs_sum / exp_count) if exp_count > 0 else float("nan")
         exp_per_t_rows = []
@@ -394,6 +427,7 @@ def main():
         "model_class": model_class_name,
         "channels": channels,
         "testset_path": args.testset_path,
+        "testset_name": testset_name,
         "normalization_base_path": normalization_base_path,
         "processed_experiments": processed_experiments,
         "time_stride": args.time_stride,

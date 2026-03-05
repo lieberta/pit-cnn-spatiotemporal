@@ -4,8 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
-from configs.train_config import TRAIN_DTYPE
 from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
 from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
 
@@ -16,6 +14,10 @@ MODEL_REGISTRY = {
     "PITCNN_dynamic_latenttime1": PITCNN_dynamic_latenttime1,
     "PITCNN_dynamic_timefirst": PITCNN_dynamic_timefirst,
 }
+
+
+def get_run_dtype(run_cfg):
+    return torch.float64 if run_cfg.get("training_dtype") == "float64" else torch.float32
 
 
 def load_run_config(run_dir: Path):
@@ -51,11 +53,11 @@ def resolve_dynamic_run(identifier: str, runs_root: Path):
     raise FileNotFoundError(f"Could not resolve run from '{identifier}' under '{runs_root}'.")
 
 
-def load_model(model_class_name: str, channels: int, checkpoint_path: Path, device: torch.device):
+def load_model(model_class_name: str, channels: int, checkpoint_path: Path, device: torch.device, train_dtype: torch.dtype):
     if model_class_name not in MODEL_REGISTRY:
         raise ValueError(f"Unsupported model class '{model_class_name}'. Available: {list(MODEL_REGISTRY.keys())}")
 
-    model = MODEL_REGISTRY[model_class_name](c=channels).to(device=device, dtype=TRAIN_DTYPE)
+    model = MODEL_REGISTRY[model_class_name](c=channels).to(device=device, dtype=train_dtype)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -216,6 +218,8 @@ def main():
 
     run_id, ckpt_path, run_dir = resolve_dynamic_run(args.run, Path(args.runs_root))
     run_cfg = load_run_config(run_dir)
+    train_dtype = get_run_dtype(run_cfg)
+    torch.set_default_dtype(train_dtype)
 
     model_class = args.model_class or run_cfg.get("model_class")
     channels = args.channels if args.channels is not None else run_cfg.get("channels")
@@ -225,7 +229,7 @@ def main():
         raise ValueError("Could not determine channels. Pass --channels or ensure config.json has channels.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = load_model(model_class, int(channels), ckpt_path, device)
+    model = load_model(model_class, int(channels), ckpt_path, device, train_dtype)
 
     test_base = Path(args.test_base_path)
     exps = list_experiments(test_base)
@@ -250,7 +254,7 @@ def main():
 
     min_temp, max_temp = load_normalization(test_base)
 
-    input0 = torch.tensor(temp[0], dtype=TRAIN_DTYPE, device=device).unsqueeze(0).unsqueeze(0)
+    input0 = torch.tensor(temp[0], dtype=train_dtype, device=device).unsqueeze(0).unsqueeze(0)
 
     out_dir = Path(args.out_dir) / run_id / exp.name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -265,7 +269,7 @@ def main():
                 print(f"[skip] t={t_seconds}s -> idx={t_idx} out of range (nt={nt})")
                 continue
 
-            t_tensor = torch.tensor([[float(t_seconds)]], dtype=TRAIN_DTYPE, device=device)
+            t_tensor = torch.tensor([[float(t_seconds)]], dtype=train_dtype, device=device)
             pred = model(input0, t_tensor).detach().cpu().numpy()[0, 0]
             gt = temp[t_idx]
             err = np.abs(pred - gt)
@@ -307,7 +311,7 @@ def main():
                 "run_dir": str(run_dir),
                 "checkpoint": str(ckpt_path),
                 "experiment": exp.name,
-                "dtype": str(TRAIN_DTYPE),
+                "dtype": str(train_dtype),
                 "model_class": model_class,
                 "channels": int(channels),
                 "seconds_per_step": args.seconds_per_step,

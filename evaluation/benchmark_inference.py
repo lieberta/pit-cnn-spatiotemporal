@@ -8,8 +8,6 @@ from statistics import mean, pstdev
 
 import numpy as np
 import torch
-
-from configs.train_config import TRAIN_DTYPE
 from data import (
     SECONDS_PER_STEP,
     list_experiment_folders,
@@ -27,6 +25,10 @@ MODEL_REGISTRY = {
     "PITCNN_dynamic_latenttime1": PITCNN_dynamic_latenttime1,
     "PITCNN_dynamic_timefirst": PITCNN_dynamic_timefirst,
 }
+
+
+def get_run_dtype(run_cfg):
+    return torch.float64 if run_cfg.get("training_dtype") == "float64" else torch.float32
 
 
 def write_csv(path: Path, rows, fieldnames):
@@ -70,11 +72,11 @@ def resolve_dynamic_run(identifier: str, runs_root: Path):
     raise FileNotFoundError(f"Could not resolve run from identifier '{identifier}' under '{runs_root}'.")
 
 
-def load_model(model_class_name: str, channels: int, checkpoint_path: Path, device: torch.device):
+def load_model(model_class_name: str, channels: int, checkpoint_path: Path, device: torch.device, train_dtype: torch.dtype):
     if model_class_name not in MODEL_REGISTRY:
         raise ValueError(f"Unsupported model class '{model_class_name}'. Available: {list(MODEL_REGISTRY.keys())}")
 
-    model = MODEL_REGISTRY[model_class_name](c=channels).to(device=device, dtype=TRAIN_DTYPE)
+    model = MODEL_REGISTRY[model_class_name](c=channels).to(device=device, dtype=train_dtype)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -201,6 +203,8 @@ def main():
 
     run_id, ckpt_path, run_dir = resolve_dynamic_run(args.run, Path(args.runs_root))
     run_cfg = load_run_config(run_dir)
+    train_dtype = get_run_dtype(run_cfg)
+    torch.set_default_dtype(train_dtype)
 
     model_class = args.model_class or run_cfg.get("model_class")
     channels = args.channels if args.channels is not None else run_cfg.get("channels")
@@ -209,7 +213,7 @@ def main():
     if channels is None:
         raise ValueError("Could not determine channels. Pass --channels or ensure config.json has channels.")
 
-    model = load_model(model_class, int(channels), ckpt_path, device)
+    model = load_model(model_class, int(channels), ckpt_path, device, train_dtype)
 
     if args.times:
         times = parse_times(args.times)
@@ -241,7 +245,7 @@ def main():
             temp = load_temperature_full(store_path, min_temp, temp_range)
             nt = temp.shape[0]
 
-            input0 = torch.tensor(temp[0], dtype=TRAIN_DTYPE, device=device).unsqueeze(0).unsqueeze(0)
+            input0 = torch.tensor(temp[0], dtype=train_dtype, device=device).unsqueeze(0).unsqueeze(0)
             sim_runtime = sim_runtime_map.get(exp.name)
 
             for t_seconds in times:
@@ -249,7 +253,7 @@ def main():
                 if t_idx <= 0 or t_idx >= nt:
                     continue
 
-                t_tensor = torch.tensor([[float(t_seconds)]], dtype=TRAIN_DTYPE, device=device)
+                t_tensor = torch.tensor([[float(t_seconds)]], dtype=train_dtype, device=device)
                 m = measure_one_forward(
                     model=model,
                     input0=input0,
@@ -263,7 +267,7 @@ def main():
                     "experiment": exp.name,
                     "t_seconds": float(t_seconds),
                     "t_idx": int(t_idx),
-                    "dtype": str(TRAIN_DTYPE),
+                    "dtype": str(train_dtype),
                     "device": str(device),
                     "warmup": int(args.warmup),
                     "repeats": int(args.repeats),
@@ -310,7 +314,7 @@ def main():
         "run_dir": str(run_dir),
         "model_class": model_class,
         "channels": int(channels),
-        "dtype": str(TRAIN_DTYPE),
+        "dtype": str(train_dtype),
         "device": str(device),
         "n_rows": len(rows),
         "n_experiments": len(set(r["experiment"] for r in rows)),

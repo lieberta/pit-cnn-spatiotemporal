@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader, random_split
 
 from dataset import HeatEquationPINNDataset
 from models.pinn import PINN
-from configs.train_config import TRAIN_DTYPE
 
 
 def set_seed(seed):
@@ -39,6 +38,7 @@ def append_metrics_row(csv_path, row):
 
 
 def run_epoch(model, loader, device, optimizer, alpha, lambda_data, lambda_pde, train):
+    train_dtype = torch.get_default_dtype()
     if train:
         model.train()
     else:
@@ -56,10 +56,10 @@ def run_epoch(model, loader, device, optimizer, alpha, lambda_data, lambda_pde, 
             coords, target = batch
             source = None
 
-        coords = coords.to(device=device, dtype=TRAIN_DTYPE)
-        target = target.to(device=device, dtype=TRAIN_DTYPE)
+        coords = coords.to(device=device, dtype=train_dtype)
+        target = target.to(device=device, dtype=train_dtype)
         if source is not None:
-            source = source.to(device=device, dtype=TRAIN_DTYPE)
+            source = source.to(device=device, dtype=train_dtype)
 
         coords = coords.reshape(-1, 4).contiguous()
         target = target.reshape(-1, 1).contiguous()
@@ -109,12 +109,14 @@ def main():
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--runs-root", type=str, default="./runs/pinn")
+    parser.add_argument("--train-dtype", default="float32", choices=["float32", "float64"])
     args = parser.parse_args()
     tic = time.perf_counter()
 
     set_seed(args.seed)
-    torch.set_default_dtype(TRAIN_DTYPE)
+    torch.set_default_dtype(torch.float64 if args.train_dtype == "float64" else torch.float32)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train_dtype = torch.get_default_dtype()
     print(f"Device: {device}")
 
     dataset = HeatEquationPINNDataset(
@@ -153,7 +155,7 @@ def main():
         hidden_features=args.hidden_features,
         hidden_layers=args.hidden_layers,
         out_features=1,
-    ).to(device=device, dtype=TRAIN_DTYPE)
+    ).to(device=device, dtype=train_dtype)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -185,7 +187,7 @@ def main():
                 "runs_root": args.runs_root,
                 "source_threshold_raw": args.source_threshold_raw,
                 "source_intensity_raw": args.source_intensity_raw,
-                "training_dtype": str(TRAIN_DTYPE),
+                "training_dtype": str(train_dtype),
             },
             f,
             indent=2,

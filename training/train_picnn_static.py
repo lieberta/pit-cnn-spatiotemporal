@@ -10,7 +10,6 @@ from tqdm import tqdm
 
 from .loss import CombinedLoss
 from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration
-from configs.train_config import TRAIN_DTYPE
 
 
 class BaseModel(nn.Module):
@@ -35,8 +34,9 @@ class BaseModel(nn.Module):
         tic = time.perf_counter()
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        train_dtype = torch.get_default_dtype()
         print("Device = " + device)
-        self.to(device=device, dtype=TRAIN_DTYPE)
+        self.to(device=device, dtype=train_dtype)
         
         train_losses = []
         val_losses = []
@@ -56,7 +56,7 @@ class BaseModel(nn.Module):
             dataset=val_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
         )
 
-        criterion = self.loss_fn.to(device=device, dtype=TRAIN_DTYPE)
+        criterion = self.loss_fn.to(device=device, dtype=train_dtype)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
 
         start_epoch = 0
@@ -71,8 +71,8 @@ class BaseModel(nn.Module):
             self.train()
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input, target) in enumerate(loop):
-                input = input.to(device, dtype=TRAIN_DTYPE)
-                target = target.to(device, dtype=TRAIN_DTYPE)
+                input = input.to(device, dtype=train_dtype)
+                target = target.to(device, dtype=train_dtype)
                 output = self(input)
 
                 if isinstance(self.loss_fn, CombinedLoss):
@@ -94,8 +94,8 @@ class BaseModel(nn.Module):
             self.eval()
             with torch.no_grad():
                 for input, target in val_loader:
-                    input = input.to(device, dtype=TRAIN_DTYPE)
-                    target = target.to(device, dtype=TRAIN_DTYPE)
+                    input = input.to(device, dtype=train_dtype)
+                    target = target.to(device, dtype=train_dtype)
                     output = self(input)
                     if isinstance(self.loss_fn, CombinedLoss):
                         loss = criterion(input, output, target)
