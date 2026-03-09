@@ -17,8 +17,8 @@ except ImportError:
     zarr = None
 
 from data import (
-    SECONDS_PER_STEP,
     list_experiment_folders,
+    load_time_grid_from_metadata,
     load_normalization_values,
     load_temperature_full,
     resolve_temperature_store,
@@ -199,7 +199,7 @@ def evaluate_dynamic_horizon(
     test_base_path: Path,
     prediction_root: Path,
     out_dir: Path,
-    seconds_per_step: float,
+    dt: float,
     min_seconds: float,
     max_seconds: float,
     eval_stride: int,
@@ -217,7 +217,7 @@ def evaluate_dynamic_horizon(
         if store_path is None:
             continue
         arr = load_temperature_full(store_path, min_temp, temp_range)
-        max_t = (arr.shape[0] - 1) * seconds_per_step
+        max_t = (arr.shape[0] - 1) * dt
         row = {"experiment": exp.name, "n_steps": int(arr.shape[0]), "max_seconds": float(max_t)}
         manifest_rows.append(row)
         if max_t >= min_seconds:
@@ -250,9 +250,9 @@ def evaluate_dynamic_horizon(
             )
 
         experiment_predictions = 0
-        end_idx = min(nt - 1, int(round(max_seconds / seconds_per_step)))
+        end_idx = min(nt - 1, int(round(max_seconds / dt)))
         for t_idx in range(1, end_idx + 1, eval_stride):
-            t_seconds = t_idx * seconds_per_step
+            t_seconds = t_idx * dt
             gt_den = denormalize(gt_norm[t_idx], min_temp, temp_range)
             pred_den = pred_den_all[t_idx]
             total_predictions += 1
@@ -337,7 +337,7 @@ def main():
         help="Root directory containing saved predictions, typically from evaluation/predict_dynamic_testset.py.",
     )
 
-    parser.add_argument("--seconds-per-step", type=float, default=float(SECONDS_PER_STEP), help="time delta represented by one index step")
+    parser.add_argument("--dt", type=float, default=None, help="time delta represented by one index step")
     parser.add_argument("--min-seconds", type=float, default=20.0, help="only evaluate experiments that reach at least this horizon")
     parser.add_argument("--max-seconds", type=float, default=20.0, help="evaluate up to this horizon")
     parser.add_argument("--eval-stride", type=int, default=1, help="evaluate every n-th timestep")
@@ -347,6 +347,11 @@ def main():
     parser.add_argument("--video-fps", type=int, default=10)
 
     args = parser.parse_args()
+    if args.dt is None:
+        _, dt, _ = load_time_grid_from_metadata(args.test_base_path)
+        args.dt = float(dt)
+    if args.dt <= 0.0:
+        raise ValueError(f"Invalid dt: {args.dt}")
 
     run_id, ckpt_path, run_dir = resolve_dynamic_run(args.run, Path(args.runs_root))
     cfg = load_run_config(run_dir)
@@ -367,7 +372,7 @@ def main():
         "run_dir": str(run_dir),
         "model_class": cfg.get("model_class"),
         "channels": cfg.get("channels"),
-        "seconds_per_step": args.seconds_per_step,
+        "dt": args.dt,
         "min_seconds": args.min_seconds,
         "max_seconds": args.max_seconds,
         "eval_stride": args.eval_stride,
@@ -380,7 +385,7 @@ def main():
         test_base_path=Path(args.test_base_path),
         prediction_root=prediction_root,
         out_dir=out_dir,
-        seconds_per_step=args.seconds_per_step,
+        dt=args.dt,
         min_seconds=args.min_seconds,
         max_seconds=args.max_seconds,
         eval_stride=max(1, args.eval_stride),

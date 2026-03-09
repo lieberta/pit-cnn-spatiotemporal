@@ -4,8 +4,6 @@ import torch
 train_dtype = torch.float32
 epochs = 50
 lr = 0.001
-lp_weight_list = [1.0]
-mse_weight = 1.0
 loss_weight_schedule = [
     {"epochs": 50, "lp_weight": 1.0, "mse_weight": 1.0},
 ]

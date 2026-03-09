@@ -402,10 +402,10 @@ if __name__ == '__main__':
 
     testset_path = './data/testset/'
     train_path ='./data/laplace_convolution/'
-    with open(testset_path + 'normalization_values.json', 'r') as json_file:
-        normalization_values = json.load(json_file)
-        max_temp = normalization_values['max_temp']
-        min_temp = normalization_values['min_temp']
+    with open(testset_path + 'info.json', 'r') as json_file:
+        info = json.load(json_file)
+        max_temp = info['max_temp']
+        min_temp = info['min_temp']
 
     min = min_temp
     dist = max_temp - min
@@ -437,5 +437,4 @@ if __name__ == '__main__':
     model = PITCNN_dynamic(c=channels).to(device)
     # pick 0 for group normalization, 1 for batchnormalization, 2 for gn and no time normalization
     make_evaluation_table_dynamic(name, model, a,lr,batch,channels)
-
 

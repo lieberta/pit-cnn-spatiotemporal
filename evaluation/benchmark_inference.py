@@ -9,8 +9,8 @@ from statistics import mean, pstdev
 import numpy as np
 import torch
 from data import (
-    SECONDS_PER_STEP,
     list_experiment_folders,
+    load_time_grid_from_metadata,
     load_normalization_values,
     load_temperature_full,
     resolve_temperature_store,
@@ -185,7 +185,7 @@ def main():
     parser.add_argument("--min-seconds", type=float, default=1.0)
     parser.add_argument("--max-seconds", type=float, default=20.0)
     parser.add_argument("--step-seconds", type=float, default=1.0)
-    parser.add_argument("--seconds-per-step", type=float, default=float(SECONDS_PER_STEP))
+    parser.add_argument("--dt", type=float, default=None)
 
     parser.add_argument("--max-experiments", type=int, default=None)
     parser.add_argument("--warmup", type=int, default=5)
@@ -198,6 +198,11 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.dt is None:
+        _, dt, _ = load_time_grid_from_metadata(args.test_base_path)
+        args.dt = float(dt)
+    if args.dt <= 0.0:
+        raise ValueError(f"Invalid dt: {args.dt}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -249,7 +254,7 @@ def main():
             sim_runtime = sim_runtime_map.get(exp.name)
 
             for t_seconds in times:
-                t_idx = int(round(t_seconds / args.seconds_per_step))
+                t_idx = int(round(t_seconds / args.dt))
                 if t_idx <= 0 or t_idx >= nt:
                     continue
 
@@ -285,7 +290,7 @@ def main():
                 rows.append(row)
 
     if not rows:
-        raise RuntimeError("No benchmark rows created. Check testset path, times, and seconds-per-step.")
+        raise RuntimeError("No benchmark rows created. Check testset path, times, and dt.")
 
     per_case_fields = [
         "experiment", "t_seconds", "t_idx", "dtype", "device", "warmup", "repeats",

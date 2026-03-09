@@ -6,22 +6,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-try:
-    import zarr
-except ImportError:
-    zarr = None
-
-SIM_STEPS_PER_SECOND = 1000.0  # Fallback value if no dataset metadata file is available.
-SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND  # Fallback dt in seconds derived from fallback steps-per-second.
+import zarr
 
 
 def get_np_dtype():
     return np.float64 if torch.get_default_dtype() == torch.float64 else np.float32
-
-
-def _require_zarr():
-    if zarr is None:
-        raise ImportError("zarr is required for .zarr datasets. Install with: pip install zarr")
 
 
 def list_experiment_folders(base_path):
@@ -32,34 +21,56 @@ def list_experiment_folders(base_path):
     ]
 
 
+def load_dataset_info(base_path):
+    info_path = os.path.join(base_path, "info.json")
+    if not os.path.exists(info_path):
+        raise FileNotFoundError(f"Missing dataset info file: {info_path}")
+
+    with open(info_path, "r") as f:
+        info = json.load(f)
+
+    required_keys = ("min_temp", "max_temp", "temp_range", "dt", "num_timesteps")
+    missing = [k for k in required_keys if k not in info]
+    if missing:
+        raise KeyError(f"Missing keys in '{info_path}': {missing}")
+
+    min_temp = float(info["min_temp"])
+    max_temp = float(info["max_temp"])
+    temp_range = float(info["temp_range"])
+    dt = float(info["dt"])
+    num_timesteps = int(info["num_timesteps"])
+
+    expected_temp_range = max_temp - min_temp
+    if expected_temp_range <= 0.0:
+        raise ValueError(f"Invalid min/max in '{info_path}': min={min_temp}, max={max_temp}")
+    if not np.isclose(temp_range, expected_temp_range, rtol=0.0, atol=1e-10):
+        raise ValueError(
+            f"Inconsistent temp_range in '{info_path}': temp_range={temp_range}, expected={expected_temp_range}"
+        )
+    if dt <= 0.0:
+        raise ValueError(f"Invalid dt in '{info_path}': {dt}")
+    if num_timesteps <= 0:
+        raise ValueError(f"Invalid num_timesteps in '{info_path}': {num_timesteps}")
+
+    return {
+        "min_temp": min_temp,
+        "max_temp": max_temp,
+        "temp_range": temp_range,
+        "dt": dt,
+        "num_timesteps": num_timesteps,
+    }
+
+
 def load_normalization_values(base_path):
-    norm_path = os.path.join(base_path, "normalization_values.json")
-    if not os.path.exists(norm_path):
-        raise FileNotFoundError(f"Missing normalization file: {norm_path}")
-    with open(norm_path, "r") as f:
-        norm = json.load(f)
-    min_temp = float(norm["min_temp"])
-    max_temp = float(norm["max_temp"])
-    temp_range = max_temp - min_temp
-    if temp_range <= 0:
-        raise ValueError(f"Invalid normalization range in '{norm_path}': min={min_temp}, max={max_temp}")
-    return min_temp, max_temp, temp_range
+    info = load_dataset_info(base_path)
+    return info["min_temp"], info["max_temp"], info["temp_range"]
 
 
-def load_time_grid_from_metadata(base_path, fallback_steps_per_second=SIM_STEPS_PER_SECOND):
-    meta_path = os.path.join(base_path, "trainset_metadata.json")  # Build the expected metadata path inside the dataset root.
-    if os.path.exists(meta_path):  # Prefer dataset-local metadata when available.
-        with open(meta_path, "r") as f:  # Open metadata file for parsing.
-            meta = json.load(f)  # Parse JSON metadata into a Python dict.
-        delta_t_seconds = float(meta["delta_t_seconds"])  # Read physical timestep size in seconds.
-        if delta_t_seconds <= 0.0:  # Guard against invalid/non-physical dt values.
-            raise ValueError(f"Invalid delta_t_seconds in '{meta_path}': {delta_t_seconds}")  # Fail early with clear context.
-        sim_steps_per_second = 1.0 / delta_t_seconds  # Convert dt to simulation steps-per-second.
-        num_timesteps = int(meta.get("num_timesteps")) if "num_timesteps" in meta else None  # Read total simulated steps if present.
-        return sim_steps_per_second, delta_t_seconds, num_timesteps  # Return resolved timing values from metadata.
-    sim_steps_per_second = float(fallback_steps_per_second)  # Use legacy fallback frequency if metadata is missing.
-    seconds_per_step = 1.0 / sim_steps_per_second  # Derive legacy dt from legacy frequency.
-    return sim_steps_per_second, seconds_per_step, None  # Return fallback timing values and unknown total timesteps.
+def load_time_grid_from_metadata(base_path):
+    info = load_dataset_info(base_path)
+    dt = info["dt"]
+    sim_steps_per_second = 1.0 / dt
+    return sim_steps_per_second, dt, info["num_timesteps"]
 
 
 def normalize_temperature(data, min_temp, temp_range):
@@ -100,7 +111,7 @@ def load_temperature_full(path, min_temp, temp_range):
 class HeatEquationMultiDataset(Dataset):
     def __init__(self, base_path="./data/laplace_convolution/", predicted_time=3):
         min_temp, _, temp_range = load_normalization_values(base_path)
-        self.sim_steps_per_second, self.seconds_per_step, _ = load_time_grid_from_metadata(base_path)  # Load timing from metadata (or fallback) for correct time indexing.
+        self.sim_steps_per_second, self.dt, _ = load_time_grid_from_metadata(base_path)  # Load timing from metadata for correct time indexing.
         folders = list_experiment_folders(base_path)
 
         self.inputs = []
@@ -207,7 +218,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self.use_index_cache = bool(use_index_cache)
         self.default_num_timesteps = int(default_num_timesteps)
         self.min_temp, self.max_temp, self.temp_range = load_normalization_values(base_path)
-        self.sim_steps_per_second, self.seconds_per_step, self.meta_num_timesteps = load_time_grid_from_metadata(base_path)  # Resolve dataset dt/frequency once for dynamic time tensors.
+        self.sim_steps_per_second, self.dt, self.meta_num_timesteps = load_time_grid_from_metadata(base_path)  # Resolve dataset dt/frequency once for dynamic time tensors.
         # Number of selected experiment folders (tracked for run metadata).
         self.num_selected_experiments = 0
 
@@ -254,7 +265,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         dtype = torch.get_default_dtype()
         input_tensor = torch.tensor(input_np, dtype=dtype).unsqueeze(0)
         target_tensor = torch.tensor(target_np, dtype=dtype).unsqueeze(0)
-        predicted_time_tensor = torch.tensor([predicted_time * self.seconds_per_step], dtype=dtype)  # Convert integer timestep index to physical time in seconds.
+        predicted_time_tensor = torch.tensor([predicted_time * self.dt], dtype=dtype)  # Convert integer timestep index to physical time in seconds.
         return (input_tensor, predicted_time_tensor), target_tensor
 
     def _index_cache_path(self):
@@ -335,10 +346,10 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             except (OSError, ValueError, TypeError):
                 pass
 
-        # 2) Fallback to dataset-level metadata file:
-        #    <dataset_root>/trainset_metadata.json
+        # 2) Fallback to dataset-level info file:
+        #    <dataset_root>/info.json
         #    where dataset_root is the parent of the experiment folder.
-        dataset_meta_path = os.path.join(os.path.dirname(folder), "trainset_metadata.json")
+        dataset_meta_path = os.path.join(os.path.dirname(folder), "info.json")
         if os.path.exists(dataset_meta_path):
             try:
                 with open(dataset_meta_path, "r") as f:

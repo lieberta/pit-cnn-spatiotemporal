@@ -9,9 +9,10 @@ except ImportError:
 
 SIM_TOTAL_SECONDS = 10.0
 SIM_STEPS_PER_SECOND = 1000.0
-SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND
-# Create global normalization values:
-def norm_values(base_path):
+DT = 1.0 / SIM_STEPS_PER_SECOND
+
+
+def norm_values(base_path, dt=DT, num_timesteps=None):
     global_max = 0.
     global_min = 200000.
     folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if
@@ -34,19 +35,44 @@ def norm_values(base_path):
         if global_min > local_min:
             global_min = local_min
 
-    # Now, save these global max and min values to a JSON file
-    normalization_values = {'max_temp': float(global_max), 'min_temp': float(global_min)}
-    with open(os.path.join(base_path, 'normalization_values.json'), 'w') as json_file:
-        json.dump(normalization_values, json_file)
+    if global_max <= global_min:
+        raise RuntimeError(f"Could not compute min/max temperatures from dataset: {base_path}")
+
+    if num_timesteps is None:
+        first_store = None
+        for folder in folders:
+            zarr_path = os.path.join(folder, "heat_equation_solution.zarr")
+            npz_file_path = os.path.join(folder, "heat_equation_solution.npz")
+            if os.path.exists(zarr_path) or os.path.exists(npz_file_path):
+                first_store = zarr_path if os.path.exists(zarr_path) else npz_file_path
+                break
+        if first_store is None:
+            raise RuntimeError(f"No experiment stores found in: {base_path}")
+        if first_store.endswith(".zarr"):
+            if zarr is None:
+                raise ImportError("zarr is required to read heat_equation_solution.zarr")
+            num_timesteps = int(zarr.open_group(first_store, mode="r")["temperature"].shape[0] - 1)
+        else:
+            num_timesteps = int(np.load(first_store)["temperature"].shape[0] - 1)
+
+    info = {
+        "min_temp": float(global_min),
+        "max_temp": float(global_max),
+        "temp_range": float(global_max - global_min),
+        "dt": float(dt),
+        "num_timesteps": int(num_timesteps),
+    }
+    with open(os.path.join(base_path, "info.json"), "w") as json_file:
+        json.dump(info, json_file, indent=2)
 
 
 
 def normalization(base_path, delete_raw_after_normalization=True):
-    # Load global normalization values
-    with open(os.path.join(base_path, 'normalization_values.json'), 'r') as json_file:
-        normalization_values = json.load(json_file)
-        max_temp = normalization_values['max_temp']
-        min_temp = normalization_values['min_temp']
+    # Load dataset info values
+    with open(os.path.join(base_path, "info.json"), "r") as json_file:
+        info = json.load(json_file)
+        max_temp = float(info["max_temp"])
+        min_temp = float(info["min_temp"])
     # create list of subfolders
     folders = [os.path.join(base_path, f) for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f)) and f.startswith('experiment')]
     # Second pass to load, normalize data, and save if not already done
@@ -74,7 +100,7 @@ def normalization(base_path, delete_raw_after_normalization=True):
             np.savez(
                 normalized_npz_filepath,
                 timesteps=timesteps,
-                dt_seconds=SECONDS_PER_STEP,
+                dt_seconds=DT,
                 total_seconds=SIM_TOTAL_SECONDS,
                 temperature=normalized_data,
             )
@@ -93,6 +119,6 @@ if __name__ == '__main__':
     #base_path = './data/testset/'
     base_path = './data/new_detailed_heat_sim'
 
-    norm_values(base_path) # generates norm values 
+    norm_values(base_path) # generates info.json
 
     normalization(base_path) 

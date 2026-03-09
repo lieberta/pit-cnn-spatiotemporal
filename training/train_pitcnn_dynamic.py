@@ -12,19 +12,13 @@ from tqdm import tqdm
 from .loss import CombinedLoss_dynamic
 from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
 
-SIM_TOTAL_SECONDS = 10.0
-SIM_STEPS_PER_SECOND = 1000.0
-SECONDS_PER_STEP = 1.0 / SIM_STEPS_PER_SECOND
-
-
 class BaseModel_dynamic(nn.Module):
     def __init__(self):
         super(BaseModel_dynamic, self).__init__()
 
     def train_model(
         self,
-        lp_weight,
-        mse_weight,
+        loss_weight_schedule,
         dataset,
         num_epochs,
         batch_size,
@@ -35,7 +29,6 @@ class BaseModel_dynamic(nn.Module):
         channels=None,
         seed=None,
         resume_checkpoint_path=None,
-        loss_weight_schedule=None,
     ):
         tic = time.perf_counter()
 
@@ -62,11 +55,18 @@ class BaseModel_dynamic(nn.Module):
             dataset=val_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
         )
 
+        if not loss_weight_schedule:
+            raise ValueError("loss_weight_schedule must be provided and non-empty.")
         min_temp = getattr(dataset, "min_temp", 20.0)
         max_temp = getattr(dataset, "max_temp", 27373.34765625)
+        dt = float(getattr(dataset, "dt"))
+        if dt <= 0.0:
+            raise ValueError(f"Invalid dataset dt: {dt}")
+        initial_lp_weight = float(loss_weight_schedule[0]["lp_weight"])
+        initial_mse_weight = float(loss_weight_schedule[0]["mse_weight"])
         criterion = CombinedLoss_dynamic(
-            lp_weight=lp_weight,
-            mse_weight=mse_weight,
+            lp_weight=initial_lp_weight,
+            mse_weight=initial_mse_weight,
             device=device,
             min_temp=min_temp,
             max_temp=max_temp,
@@ -94,20 +94,16 @@ class BaseModel_dynamic(nn.Module):
             start_epoch = load_checkpoint(self, optimizer, resume_checkpoint_path, device)
             print(f"Resuming from checkpoint: {resume_checkpoint_path} (start_epoch={start_epoch})")
 
-        if loss_weight_schedule:
-            lp_by_epoch = []
-            mse_by_epoch = []
-            for phase in loss_weight_schedule:
-                phase_epochs = int(phase["epochs"])
-                lp_by_epoch.extend([float(phase["lp_weight"])] * phase_epochs)
-                mse_by_epoch.extend([float(phase["mse_weight"])] * phase_epochs)
-            if len(lp_by_epoch) != num_epochs:
-                raise ValueError(
-                    f"loss_weight_schedule must cover exactly num_epochs={num_epochs}, got {len(lp_by_epoch)} epochs."
-                )
-        else:
-            lp_by_epoch = [float(lp_weight)] * num_epochs
-            mse_by_epoch = [float(mse_weight)] * num_epochs
+        lp_by_epoch = []
+        mse_by_epoch = []
+        for phase in loss_weight_schedule:
+            phase_epochs = int(phase["epochs"])
+            lp_by_epoch.extend([float(phase["lp_weight"])] * phase_epochs)
+            mse_by_epoch.extend([float(phase["mse_weight"])] * phase_epochs)
+        if len(lp_by_epoch) != num_epochs:
+            raise ValueError(
+                f"loss_weight_schedule must cover exactly num_epochs={num_epochs}, got {len(lp_by_epoch)} epochs."
+            )
 
         for epoch in range(start_epoch, num_epochs):
             criterion.lp_weight = float(lp_by_epoch[epoch])
@@ -128,7 +124,7 @@ class BaseModel_dynamic(nn.Module):
                 target = target.to(device, dtype=train_dtype)
 
                 # creates a tensor for delta_t to match tensor t
-                delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=train_dtype)
+                delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
                 t_past = t - delta_t
                 output = self(input, t)
                 first_step_mask = torch.isclose(t, delta_t, rtol=0.0, atol=1e-6)  # creates bool-mask per batch-element (shape: (B,1)), True where t ≈ delta_t, so where t_past would be ≈ 0 (with a tolerance of 1e-6 to account for floating point precision issues)
@@ -167,7 +163,7 @@ class BaseModel_dynamic(nn.Module):
                     t = t.to(device, dtype=train_dtype)
                     target = target.to(device, dtype=train_dtype)
                     # creates a tensor for delta_t to match tensor t
-                    delta_t = torch.full_like(t, SECONDS_PER_STEP, device=device, dtype=train_dtype)
+                    delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
                     t_past = t - delta_t
                     output = self(input, t)
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from simulation.heat_sim_class import HeatSimulation
+from simulation.heat_sim_initial import HeatSimulation
 from simulation.preprocess import norm_values, normalization
 
 
@@ -148,7 +148,7 @@ def main():
     parser.add_argument("--nt", type=int, default=20000, help="number of simulation steps")
     parser.add_argument("--save-every", type=int, default=100, help="save every n-th simulated step")
     parser.add_argument("--device", default=None, help="cpu|cuda; default auto")
-    parser.add_argument("--normalize", action="store_true", help="compute normalization_values.json and normalized npz files")
+    parser.add_argument("--normalize", action="store_true", help="compute info.json and normalized npz files")
     args = parser.parse_args()
 
     if args.fires_min < 1 or args.fires_max < args.fires_min:
@@ -235,8 +235,12 @@ def main():
     )
 
     if args.normalize:
-        print("[info] computing normalization values and normalized files...")
-        norm_values(str(out_root))
+        print("[info] computing dataset info and normalized files...")
+        norm_values(
+            str(out_root),
+            dt=float(args.sim_time_seconds / args.nt),
+            num_timesteps=int(args.nt),
+        )
         normalization(str(out_root))
 
     print(f"[done] generated {len(rows)} experiments in {global_runtime:.2f}s")

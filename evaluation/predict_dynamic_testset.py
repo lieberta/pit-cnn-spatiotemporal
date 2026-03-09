@@ -14,8 +14,8 @@ except ImportError:
     zarr = None
 
 from data import (
-    SECONDS_PER_STEP,
     list_experiment_folders,
+    load_time_grid_from_metadata,  # Load dataset timing metadata (dt) from the training-set path.
     load_normalization_values,
     load_temperature_full,
     resolve_temperature_store,
@@ -134,19 +134,19 @@ def resolve_normalization_base_path(run_cfg, testset_path: str) -> str:
     )
 
 
-def load_axes_from_store(store_path: str, nt: int, nx: int, ny: int, nz: int):
+def load_axes_from_store(store_path: str, nt: int, nx: int, ny: int, nz: int, dt: float):
     if store_path.endswith(".zarr"):
         if zarr is None:
             raise ImportError("zarr is required to read .zarr datasets. Install with: pip install zarr")
         root = zarr.open_group(store_path, mode="r")
-        time_axis = np.asarray(root["time"]) if "time" in root else np.arange(nt, dtype=np.float32) * float(SECONDS_PER_STEP)
+        time_axis = np.asarray(root["time"]) if "time" in root else np.arange(nt, dtype=np.float32) * float(dt)
         x_axis = np.asarray(root["x"]) if "x" in root else np.arange(nx, dtype=np.float32)
         y_axis = np.asarray(root["y"]) if "y" in root else np.arange(ny, dtype=np.float32)
         z_axis = np.asarray(root["z"]) if "z" in root else np.arange(nz, dtype=np.float32)
         return time_axis, x_axis, y_axis, z_axis
 
     with np.load(store_path) as npz_file:
-        time_axis = npz_file["time"] if "time" in npz_file.files else np.arange(nt, dtype=np.float32) * float(SECONDS_PER_STEP)
+        time_axis = npz_file["time"] if "time" in npz_file.files else np.arange(nt, dtype=np.float32) * float(dt)
         x_axis = npz_file["x"] if "x" in npz_file.files else np.arange(nx, dtype=np.float32)
         y_axis = npz_file["y"] if "y" in npz_file.files else np.arange(ny, dtype=np.float32)
         z_axis = npz_file["z"] if "z" in npz_file.files else np.arange(nz, dtype=np.float32)
@@ -215,6 +215,10 @@ def main():
 
     normalization_base_path = resolve_normalization_base_path(run_cfg, args.testset_path)
     min_temp, _, temp_range = load_normalization_values(normalization_base_path)
+    _, dt, _ = load_time_grid_from_metadata(normalization_base_path)  # Resolve dt from the exact training dataset used by this run.
+    dt = float(dt)  # Normalize numeric type for consistent arithmetic and JSON output.
+    if dt <= 0.0:  # Reject non-physical dt values early instead of producing corrupted timestamps.
+        raise ValueError(f"Invalid dt resolved from '{normalization_base_path}': {dt}")  # Fail fast with path context for debugging.
     folders = sorted(list_experiment_folders(args.testset_path))
     folders = folders[args.experiment_offset :]
     if args.max_experiments is not None:
@@ -263,7 +267,7 @@ def main():
 
         with torch.no_grad():
             for t_idx in range(1, nt, args.time_stride):
-                t_seconds = t_idx * SECONDS_PER_STEP
+                t_seconds = t_idx * dt
                 time_tensor = torch.tensor([[t_seconds]], dtype=train_dtype, device=device)
                 # Measure only the model forward pass so prediction runtime stays comparable.
                 if device.type == "cuda":
@@ -311,7 +315,7 @@ def main():
 
         exp_out = pred_dir / exp_name
         exp_out.mkdir(parents=True, exist_ok=True)
-        time_axis, x_axis, y_axis, z_axis = load_axes_from_store(store, nt, nx, ny, nz)
+        time_axis, x_axis, y_axis, z_axis = load_axes_from_store(store, nt, nx, ny, nz, dt=dt)
         write_prediction_zarr(exp_out, pred_denorm, time_axis, x_axis, y_axis, z_axis)
         render_experiment(
             exp_out,
@@ -319,6 +323,7 @@ def main():
             step_every=args.plot_step_every,
             vmax_clip=500.0,
             output_subdir=args.plot_output_subdir,
+            vmin_clip=0.0,
         )
 
         exp_mae = (exp_abs_sum / exp_count) if exp_count > 0 else float("nan")
@@ -327,7 +332,7 @@ def main():
             exp_per_t_rows.append(
                 {
                     "timestep_index": t_idx,
-                    "time_seconds": t_idx * float(SECONDS_PER_STEP),
+                    "time_seconds": t_idx * dt,
                     "mae_abs": exp_per_t_abs_sum[t_idx] / exp_per_t_count[t_idx],
                 }
             )
@@ -377,7 +382,7 @@ def main():
         per_t_rows.append(
             {
                 "timestep_index": t_idx,
-                "time_seconds": t_idx * float(SECONDS_PER_STEP),
+                "time_seconds": t_idx * dt,
                 "mae_abs": mae_t,
             }
         )
@@ -429,6 +434,7 @@ def main():
         "testset_path": args.testset_path,
         "testset_name": testset_name,
         "normalization_base_path": normalization_base_path,
+        "dt_used": dt,  # Record the effective dt so downstream analysis can verify time scaling.
         "processed_experiments": processed_experiments,
         "time_stride": args.time_stride,
         "mae_bucket_seconds": 0.1,

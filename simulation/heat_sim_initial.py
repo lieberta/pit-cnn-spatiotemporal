@@ -81,6 +81,7 @@ class HeatSimulation:
         self.setup_source_term()
 
     @staticmethod
+    # creates 
     def place_fireplace(max_x, max_y):
         width = random.randint(1, 4)
         height = random.randint(1, 4)
@@ -109,8 +110,9 @@ class HeatSimulation:
         self.tic = time.perf_counter()
         for n in range(self.Nt):
             laplacian = self.laplacian3D(self.u[n : n + 1])
+            # Explicit Euler update for timestep n+1
             self.u[n + 1] = self.u[n] + self.alpha * self.dt * laplacian + self.dt * self.source_term
-
+            # dirichlet boundary padding
             self.u[n + 1, 0, :, :] = self.ambient_temp
             self.u[n + 1, self.Nx - 1, :, :] = self.ambient_temp
             self.u[n + 1, :, 0, :] = self.ambient_temp
@@ -257,6 +259,8 @@ if __name__ == "__main__":
         f"saved time points (including t=0): {cfg['num_time_points']}"
     )
 
+    global_min_temp = None
+    global_max_temp = None
     for num_fires in cfg["num_fires_list"]:
         print(f"Number of fires: {num_fires}")
         for i in range(cfg["experiments_per_fire_count"]):
@@ -273,3 +277,21 @@ if __name__ == "__main__":
                 include_axes=cfg["include_axes"],
                 chunk_t=cfg["chunk_t"],
             )
+            sim_min = float(simulation.min_temp)
+            sim_max = float(simulation.max_temp)
+            global_min_temp = sim_min if global_min_temp is None else min(global_min_temp, sim_min)
+            global_max_temp = sim_max if global_max_temp is None else max(global_max_temp, sim_max)
+
+    if global_min_temp is None or global_max_temp is None:
+        raise RuntimeError(f"No experiments generated; cannot write dataset info.json in '{cfg['out_root']}'.")
+    info = {
+        "min_temp": float(global_min_temp),
+        "max_temp": float(global_max_temp),
+        "temp_range": float(global_max_temp - global_min_temp),
+        "dt": float(cfg["dt"]),
+        "num_timesteps": int(cfg["Nt"]),
+    }
+    info_path = os.path.join(cfg["out_root"], "info.json")
+    with open(info_path, "w") as f:
+        json.dump(info, f, indent=2)
+    print(f"Wrote dataset info: {info_path}")

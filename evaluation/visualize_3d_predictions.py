@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from data import load_time_grid_from_metadata
 from models.pitcnn_latenttime import PITCNN_dynamic, PITCNN_dynamic_batchnorm, PITCNN_dynamic_latenttime1
 from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
 
@@ -84,10 +85,10 @@ def list_experiments(base_path: Path):
 
 
 def load_normalization(base_path: Path):
-    norm_path = base_path / "normalization_values.json"
-    if not norm_path.exists():
+    info_path = base_path / "info.json"
+    if not info_path.exists():
         return None, None
-    with norm_path.open("r") as f:
+    with info_path.open("r") as f:
         d = json.load(f)
     return float(d["min_temp"]), float(d["max_temp"])
 
@@ -209,12 +210,17 @@ def main():
     parser.add_argument("--experiment-name", default=None, help="exact experiment folder name")
     parser.add_argument("--experiment-idx", type=int, default=0, help="used if --experiment-name is not set")
     parser.add_argument("--times", default="1,5,10,20", help="comma-separated seconds, e.g. '1,5,10,20'")
-    parser.add_argument("--seconds-per-step", type=float, default=0.1)
+    parser.add_argument("--dt", type=float, default=None)
     parser.add_argument("--channels", type=int, default=None)
     parser.add_argument("--model-class", default=None)
     parser.add_argument("--out-dir", default="./plots/volumetric_eval")
 
     args = parser.parse_args()
+    if args.dt is None:
+        _, dt, _ = load_time_grid_from_metadata(args.test_base_path)
+        args.dt = float(dt)
+    if args.dt <= 0.0:
+        raise ValueError(f"Invalid dt: {args.dt}")
 
     run_id, ckpt_path, run_dir = resolve_dynamic_run(args.run, Path(args.runs_root))
     run_cfg = load_run_config(run_dir)
@@ -264,7 +270,7 @@ def main():
 
     with torch.no_grad():
         for t_seconds in wanted_times:
-            t_idx = int(round(t_seconds / args.seconds_per_step))
+            t_idx = int(round(t_seconds / args.dt))
             if t_idx <= 0 or t_idx >= nt:
                 print(f"[skip] t={t_seconds}s -> idx={t_idx} out of range (nt={nt})")
                 continue
@@ -314,7 +320,7 @@ def main():
                 "dtype": str(train_dtype),
                 "model_class": model_class,
                 "channels": int(channels),
-                "seconds_per_step": args.seconds_per_step,
+                "dt": args.dt,
                 "exports": exported,
             },
             f,
