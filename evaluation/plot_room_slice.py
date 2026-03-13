@@ -32,7 +32,14 @@ def find_fire_slice_y(temp_t0):
     return y_fire
 
 
-def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, vmax_clip: float, output_subdir: str):
+def render_experiment(
+    experiment_folder: Path,
+    npz_name: str,
+    step_every: int,
+    vmax_clip: float,
+    output_subdir: str,
+    vmin_clip: float = None,
+):
     store_path = experiment_folder / npz_name
     if store_path.suffix == ".zarr":
         if not store_path.exists():
@@ -51,11 +58,17 @@ def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, v
         time_axis = data["time"] if "time" in data.files else np.arange(data["temperature"].shape[0], dtype=np.float64)
         temperature = data["temperature"]
 
-    global_min_temp = float(np.min(temperature))
-    global_max_temp = float(np.max(temperature)) if vmax_clip <= 0 else min(float(np.max(temperature)), vmax_clip)
+    data_min_temp = float(np.min(temperature))
+    data_max_temp = float(np.max(temperature))
+    global_min_temp = data_min_temp if vmin_clip is None else max(data_min_temp, float(vmin_clip))
+    global_max_temp = data_max_temp if vmax_clip <= 0 else min(data_max_temp, vmax_clip)
+    if global_max_temp <= global_min_temp:
+        global_max_temp = global_min_temp + 1e-6
 
     y_fire = find_fire_slice_y(temperature[0])
     plots_folder = create_subfolder(experiment_folder, output_subdir)
+    cmap = plt.get_cmap("hot").copy()
+    cmap.set_under("blue")
 
     for timestep in range(temperature.shape[0]):
         if timestep % max(1, step_every) != 0:
@@ -64,7 +77,7 @@ def render_experiment(experiment_folder: Path, npz_name: str, step_every: int, v
         plt.figure()
         plt.imshow(
             temperature[timestep, :, y_fire, :].T,
-            cmap="hot",
+            cmap=cmap,
             extent=(0, temperature.shape[1], 0, temperature.shape[3]),
             origin="lower",
             vmin=global_min_temp,
@@ -87,6 +100,7 @@ def main():
     parser.add_argument("--experiment", default="experiment_15_20260223_140219", help="optional exact experiment folder name")
     parser.add_argument("--normalized", action="store_true", help="use normalized store instead of raw")
     parser.add_argument("--step-every", type=int, default=10, help="render every n-th stored timestep")
+    parser.add_argument("--vmin-clip", type=float, default=0.0, help="fixed lower color limit; values below are shown in blue")
     parser.add_argument("--vmax-clip", type=float, default=500.0, help="<=0 disables clip")
     parser.add_argument("--output-subdir", default="plots", help="subfolder inside the experiment folder")
     args = parser.parse_args()
@@ -112,6 +126,7 @@ def main():
             step_every=args.step_every,
             vmax_clip=args.vmax_clip,
             output_subdir=args.output_subdir,
+            vmin_clip=args.vmin_clip,
         )
 
 

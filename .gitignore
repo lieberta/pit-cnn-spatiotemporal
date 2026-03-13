@@ -7,3 +7,5 @@ __pycache__/
 *.pyc
 evaluation/predictions/
 terminal_output_main.log
+configs/
+slurm-*.out

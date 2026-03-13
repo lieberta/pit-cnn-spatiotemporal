@@ -28,8 +28,6 @@ eval "$(conda shell.bash hook)"
 
 conda activate /beegfs/home/l/lieberta/venv/penn-venv/
 
-# source ~/.virtualenvs/geospatial-time-series/bin/activate
-
 conda info --envs
 
 python main.py --config "${TRAIN_CONFIG:-configs/pitcnn_dynamic_config.py}"
