@@ -1,0 +1,558 @@
+import argparse
+from pathlib import Path
+from typing import Optional
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def list_experiment_dirs(base_path: Path):
+    return sorted([p for p in base_path.iterdir() if p.is_dir() and p.name.startswith("experiment_")])
+
+
+def load_field(exp_dir: Path, normalized: bool):
+    candidates = []
+    if normalized:
+        candidates = [
+            exp_dir / "normalized_heat_equation_solution.zarr",
+            exp_dir / "normalized_heat_equation_solution.npz",
+        ]
+    else:
+        candidates = [
+            exp_dir / "heat_equation_solution.zarr",
+            exp_dir / "heat_equation_solution.npz",
+        ]
+
+    store_path = next((p for p in candidates if p.exists()), None)
+    if store_path is None:
+        return None
+
+    if store_path.suffix == ".zarr":
+        try:
+            import zarr
+        except Exception as e:
+            raise RuntimeError("zarr is required to read .zarr simulation stores.") from e
+        root = zarr.open_group(str(store_path), mode="r")
+        field = root["temperature"]
+        if "time" in root.array_keys():
+            times = np.asarray(root["time"][:], dtype=np.float64)
+        else:
+            times = np.arange(int(field.shape[0]), dtype=np.float64)
+        return field, times
+
+    data = np.load(store_path)
+    field = data["temperature"]  # [nt, nx, ny, nz]
+    times = data["time"] if "time" in data.files else np.arange(field.shape[0], dtype=np.float64)
+    return field, times
+
+
+def unique_video_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    i = 1
+    while True:
+        cand = path.with_name(f"{stem}_{i:02d}{suffix}")
+        if not cand.exists():
+            return cand
+        i += 1
+
+
+def _prediction_out_dir(exp_dir: Path, out_root: Path) -> Optional[Path]:
+    """
+    Build a structured output path for prediction visualizations:
+    out_root/prediction/<model_name>/<run_name>/<experiment_name>
+    """
+    try:
+        parts = exp_dir.resolve().parts
+    except Exception:
+        return None
+
+    if "predictions" not in parts:
+        return None
+
+    pred_idx = parts.index("predictions")
+    # Expected shape: .../<model_name>/<run_name>/predictions/<testset>/<experiment_name>
+    if pred_idx < 2:
+        return None
+
+    model_name = parts[pred_idx - 2]
+    run_name = parts[pred_idx - 1]
+    return out_root / "prediction" / model_name / run_name / exp_dir.name
+
+
+def render_frame(
+    ax,
+    temp_3d,
+    vmin,
+    vmax,
+    elev,
+    azim,
+    downsample,
+    threshold_quantile,
+    style,
+    max_cloud_points,
+    cloud_gamma,
+    frame_seed,
+    source_xy,
+    source_marker_mode,
+    ambient_temp,
+    heat_threshold,
+    viz_gamma,
+    style_cmap,
+    voxel_alpha_base,
+    voxel_alpha_scale,
+    voxel_alpha_gamma,
+):
+    # Downsample to keep rendering practical for long videos.
+    t = temp_3d[::downsample, ::downsample, ::downsample]
+    if style == "voxel":
+        heat = np.clip(t - ambient_temp, 0.0, None)
+        span = max(vmax - ambient_temp, 1e-12)
+        h0 = np.clip(heat / span, 0.0, 1.0)
+        filled = h0 >= heat_threshold
+
+        facecolors = np.zeros(t.shape + (4,), dtype=np.float64)
+        if np.any(filled):
+            # Keep the original red<->yellow look from the earlier renderer
+            # (no white/brown low-end), while retaining the new fixed viz range.
+            h_col = np.clip(np.power(h0, viz_gamma), 0.0, 1.0)
+            rgba = np.zeros(t.shape + (4,), dtype=np.float64)
+            # Cooler -> yellow, hotter -> red
+            rgba[..., 0] = 1.0
+            rgba[..., 1] = 0.92 * (1.0 - h_col)
+            rgba[..., 2] = 0.0
+            # Hotter cells are less transparent (more opaque) than cooler cells.
+            rgba[..., 3] = np.clip(
+                voxel_alpha_base + voxel_alpha_scale * np.power(h0, voxel_alpha_gamma),
+                0.0,
+                1.0,
+            )
+            facecolors[filled] = rgba[filled]
+
+        # Mark heat sources with explicit opaque source core + halo + short plume.
+        if source_xy is not None and len(source_xy) > 0:
+            sx = np.clip(source_xy[:, 0], 0, t.shape[0] - 1)
+            sy = np.clip(source_xy[:, 1], 0, t.shape[1] - 1)
+            for x0, y0 in zip(sx, sy):
+                # 1) Source core at floor.
+                if source_marker_mode in ("all", "core"):
+                    filled[x0, y0, 0] = True
+                    facecolors[x0, y0, 0] = np.array([0.95, 0.06, 0.02, 0.98], dtype=np.float64)
+
+                # 2) Floor halo ring around source.
+                if source_marker_mode in ("all", "halo"):
+                    for dx in (-1, 0, 1):
+                        for dy in (-1, 0, 1):
+                            if dx == 0 and dy == 0:
+                                continue
+                            xx = x0 + dx
+                            yy = y0 + dy
+                            if 0 <= xx < t.shape[0] and 0 <= yy < t.shape[1]:
+                                filled[xx, yy, 0] = True
+                                facecolors[xx, yy, 0] = np.array([1.00, 0.78, 0.12, 0.84], dtype=np.float64)
+
+                # 3) Short source column for oblique views.
+                if source_marker_mode in ("all", "column"):
+                    z_max = min(3, t.shape[2])
+                    for zz in range(1, z_max):
+                        filled[x0, y0, zz] = True
+                        facecolors[x0, y0, zz] = np.array([0.98, 0.18, 0.04, 0.90], dtype=np.float64)
+
+        ax.voxels(
+            filled,
+            facecolors=facecolors,
+            edgecolor=(0.0, 0.0, 0.0, 0.04),
+            linewidth=0.10,
+        )
+    elif style == "cloud":
+        rng = np.random.default_rng(frame_seed)
+        norm = np.clip((t - vmin) / (vmax - vmin + 1e-12), 0.0, 1.0)
+        active_mask = norm > np.quantile(norm, max(0.0, threshold_quantile - 0.35))
+        if not np.any(active_mask):
+            active_mask = norm > 0.0
+
+        x, y, z = np.where(active_mask)
+        w = np.power(norm[active_mask], max(1e-6, cloud_gamma))
+        w_sum = np.sum(w)
+        if w_sum <= 0:
+            w = np.ones_like(w) / len(w)
+        else:
+            w = w / w_sum
+
+        n = min(max_cloud_points, len(x))
+        chosen = rng.choice(len(x), size=n, replace=False, p=w if len(x) > 1 else None)
+
+        xs = x[chosen].astype(np.float64)
+        ys = y[chosen].astype(np.float64)
+        zs = z[chosen].astype(np.float64)
+        vals = norm[active_mask][chosen]
+
+        colors = plt.cm.autumn_r(vals)  # yellow -> red (hotter = red)
+        sizes = 10 + 42 * vals
+        alphas = 0.12 + 0.72 * vals
+        colors[:, 3] = np.clip(alphas, 0.12, 0.98)
+
+        ax.scatter(xs, ys, zs, c=colors, s=sizes, marker="s", linewidths=0.0, depthshade=True)
+    else:
+        # Two-layer rendering improves 3D shape perception:
+        # warm shell + hot core.
+        q_shell = np.quantile(t, max(0.0, threshold_quantile - 0.55))
+        q_core = np.quantile(t, threshold_quantile)
+
+        mask_shell = t >= q_shell
+        mask_core = t >= q_core
+        if not np.any(mask_core):
+            mask_core = t >= np.max(t)
+
+        if np.any(mask_shell):
+            xs, ys, zs = np.where(mask_shell)
+            vals_shell = t[mask_shell]
+            norm_shell = np.clip((vals_shell - vmin) / (vmax - vmin + 1e-12), 0.0, 1.0)
+            colors_shell = plt.cm.autumn_r(norm_shell)  # yellow -> red
+            ax.scatter(xs, ys, zs, c=colors_shell, s=12, marker="s", linewidths=0.0, alpha=0.18)
+
+        xc, yc, zc = np.where(mask_core)
+        vals_core = t[mask_core]
+        norm_core = np.clip((vals_core - vmin) / (vmax - vmin + 1e-12), 0.0, 1.0)
+        colors_core = plt.cm.autumn_r(norm_core)  # yellow -> red
+        sizes_core = 16 + 44 * norm_core
+        ax.scatter(xc, yc, zc, c=colors_core, s=sizes_core, marker="s", linewidths=0.0, alpha=0.62)
+
+    if style != "voxel" and source_marker_mode != "none" and source_xy is not None and len(source_xy) > 0:
+        sx = source_xy[:, 0]
+        sy = source_xy[:, 1]
+        # Draw source cells as subtle warm floor markers (no black blocks).
+        sz = np.zeros_like(sx, dtype=np.float64) + 0.02
+        ax.scatter(
+            sx,
+            sy,
+            sz,
+            c=np.array([[0.92, 0.18, 0.04, 0.68]]),
+            s=120,
+            marker="o",
+            linewidths=0.0,
+            edgecolors="none",
+            depthshade=False,
+        )
+
+    # Lightweight 3D room boundary lines for orientation.
+    x0, x1 = 0, t.shape[0] - 1
+    y0, y1 = 0, t.shape[1] - 1
+    z0, z1 = 0, t.shape[2] - 1
+    edges = [
+        ((x0, y0, z0), (x1, y0, z0)),
+        ((x0, y1, z0), (x1, y1, z0)),
+        ((x0, y0, z1), (x1, y0, z1)),
+        ((x0, y1, z1), (x1, y1, z1)),
+        ((x0, y0, z0), (x0, y1, z0)),
+        ((x1, y0, z0), (x1, y1, z0)),
+        ((x0, y0, z1), (x0, y1, z1)),
+        ((x1, y0, z1), (x1, y1, z1)),
+        ((x0, y0, z0), (x0, y0, z1)),
+        ((x1, y0, z0), (x1, y0, z1)),
+        ((x0, y1, z0), (x0, y1, z1)),
+        ((x1, y1, z0), (x1, y1, z1)),
+    ]
+    for a, b in edges:
+        ax.plot3D(
+            [a[0], b[0]],
+            [a[1], b[1]],
+            [a[2], b[2]],
+            color=(0.3, 0.3, 0.3, 0.55),
+            linewidth=0.8,
+        )
+
+    ax.set_xlim(0, t.shape[0] - 1)
+    ax.set_ylim(0, t.shape[1] - 1)
+    ax.set_zlim(0, t.shape[2] - 1)
+    ax.set_box_aspect((t.shape[0], t.shape[1], t.shape[2]))
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_facecolor("white")
+    ax.xaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+    ax.yaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+    ax.zaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+    ax.view_init(elev=elev, azim=azim)
+    ax.grid(False)
+
+
+def make_video_for_experiment(
+    exp_dir: Path,
+    out_root: Path,
+    normalized: bool,
+    fps: int,
+    frame_stride: int,
+    max_frames: int,
+    downsample: int,
+    threshold_quantile: float,
+    elev: float,
+    azim: float,
+    save_frames_every: int,
+    style: str,
+    max_cloud_points: int,
+    cloud_gamma: float,
+    source_marker_mode: str,
+    ambient_temp: Optional[float],
+    heat_threshold: float,
+    viz_vmin: Optional[float],
+    viz_vmax: float,
+    viz_gamma: float,
+    style_cmap: str,
+    assume_dt: float,
+    last_frame_only: bool,
+    voxel_alpha_base: float,
+    voxel_alpha_scale: float,
+    voxel_alpha_gamma: float,
+):
+    loaded = load_field(exp_dir, normalized=normalized)
+    if loaded is None:
+        print(f"[skip] missing npz in {exp_dir}")
+        return
+
+    field, times = loaded
+    nt = field.shape[0]
+    times_arr = np.asarray(times, dtype=np.float64)
+    if times_arr.shape[0] != nt:
+        times_arr = np.linspace(0.0, float(nt - 1), nt, dtype=np.float64)
+    if nt > 2:
+        dt_med = float(np.median(np.diff(times_arr)))
+        looks_like_index_time = (abs(dt_med - 1.0) < 1e-9) and (abs(times_arr[-1] - float(nt - 1)) < 1e-6)
+        if looks_like_index_time:
+            times_arr = np.arange(nt, dtype=np.float64) * float(assume_dt)
+
+    # Time-synced sampling: 1 second in video corresponds to 1 second in simulation.
+    t0_sim = float(times_arr[0])
+    t1_sim = float(times_arr[-1])
+    sim_duration = max(0.0, t1_sim - t0_sim)
+    n_target = max(1, int(np.floor(sim_duration * max(1, fps))))
+    target_times = t0_sim + np.arange(n_target, dtype=np.float64) / max(1, fps)
+    idxs = np.searchsorted(times_arr, target_times, side="left")
+    idxs = np.clip(idxs, 0, nt - 1)
+    idxs = np.unique(idxs).tolist()
+
+    # Optional extra thinning (off by default) after time-synced index generation.
+    if frame_stride > 1:
+        idxs = idxs[::frame_stride]
+    if max_frames > 0:
+        idxs = idxs[:max_frames]
+    if not idxs:
+        print(f"[skip] no frames selected for {exp_dir.name}")
+        return
+
+    # Detect source locations on the floor from t=0.
+    t0 = field[0, :: max(1, downsample), :: max(1, downsample), :: max(1, downsample)]
+    floor = t0[:, :, 0]
+    floor_max = float(np.max(floor))
+    floor_med = float(np.median(floor))
+    source_threshold = floor_med + 0.7 * (floor_max - floor_med)
+    source_mask = floor >= source_threshold
+    if not np.any(source_mask):
+        source_mask = floor == floor_max
+    src_x, src_y = np.where(source_mask)
+    source_xy = np.stack([src_x, src_y], axis=1) if len(src_x) > 0 else None
+    if ambient_temp is None:
+        ambient_temp = float(np.quantile(t0, 0.25))
+    # --- visualization range (fixed across all frames) ---
+    vmin_vis = ambient_temp if viz_vmin is None else float(viz_vmin)
+    vmax_vis = float(viz_vmax)
+    vmax_vis = max(vmax_vis, vmin_vis + 1e-6)
+
+    out_dir = _prediction_out_dir(exp_dir=exp_dir, out_root=out_root)
+    if out_dir is None:
+        out_dir = out_root / exp_dir.name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if last_frame_only:
+        t_idx = nt - 1
+        fig = plt.figure(figsize=(8, 6), dpi=120)
+        ax = fig.add_subplot(111, projection="3d")
+        render_frame(
+            ax=ax,
+            temp_3d=field[t_idx],
+            vmin=vmin_vis,
+            vmax=vmax_vis,
+            elev=elev,
+            azim=azim,
+            downsample=max(1, downsample),
+            threshold_quantile=threshold_quantile,
+            style=style,
+            max_cloud_points=max(1, max_cloud_points),
+            cloud_gamma=cloud_gamma,
+            frame_seed=t_idx,
+            source_xy=source_xy,
+            source_marker_mode=source_marker_mode,
+            ambient_temp=ambient_temp,
+            heat_threshold=heat_threshold,
+            viz_gamma=viz_gamma,
+            style_cmap=style_cmap,
+            voxel_alpha_base=voxel_alpha_base,
+            voxel_alpha_scale=voxel_alpha_scale,
+            voxel_alpha_gamma=voxel_alpha_gamma,
+        )
+        t_val = float(times_arr[t_idx]) if t_idx < len(times_arr) else float(t_idx)
+        unit = "norm" if normalized else "C"
+        ax.set_title(f"{exp_dir.name} | t={t_val:.2f} | temp ({unit})")
+        out_png = unique_video_path(out_dir / "last_frame.png").resolve()
+        fig.savefig(out_png)
+        plt.close(fig)
+        print(f"[done] wrote {out_png} (last frame at t={t_val:.2f}s)")
+        return
+
+    try:
+        import imageio.v2 as imageio
+    except Exception as e:
+        raise RuntimeError("imageio is required for video writing (pip install imageio)") from e
+
+    frames_dir = out_dir / "frames"
+    if save_frames_every > 0:
+        frames_dir.mkdir(parents=True, exist_ok=True)
+    video_path = out_dir / "temperature_cube.mp4"
+    video_path = unique_video_path(video_path)
+
+    writer = imageio.get_writer(video_path, fps=max(1, fps))
+    print(
+        f"[info] {exp_dir.name}: rendering {len(idxs)} frames "
+        f"(sim {sim_duration:.2f}s -> video {len(idxs)/max(1, fps):.2f}s, "
+        f"style={style}, downsample={downsample}, vmin={vmin_vis:.3f}, vmax={vmax_vis:.3f}, cmap={style_cmap})",
+        flush=True,
+    )
+    try:
+        for i, t_idx in enumerate(idxs):
+            fig = plt.figure(figsize=(8, 6), dpi=120)
+            ax = fig.add_subplot(111, projection="3d")
+            render_frame(
+                ax=ax,
+                temp_3d=field[t_idx],
+                vmin=vmin_vis,
+                vmax=vmax_vis,
+                elev=elev,
+                azim=azim,
+                downsample=max(1, downsample),
+                threshold_quantile=threshold_quantile,
+                style=style,
+                max_cloud_points=max(1, max_cloud_points),
+                cloud_gamma=cloud_gamma,
+                frame_seed=t_idx,
+                source_xy=source_xy,
+                source_marker_mode=source_marker_mode,
+                ambient_temp=ambient_temp,
+                heat_threshold=heat_threshold,
+                viz_gamma=viz_gamma,
+                style_cmap=style_cmap,
+                voxel_alpha_base=voxel_alpha_base,
+                voxel_alpha_scale=voxel_alpha_scale,
+                voxel_alpha_gamma=voxel_alpha_gamma,
+            )
+            t_val = float(times_arr[t_idx]) if t_idx < len(times_arr) else float(t_idx)
+            unit = "norm" if normalized else "C"
+            ax.set_title(f"{exp_dir.name} | t={t_val:.2f} | temp ({unit})")
+            if save_frames_every > 0 and (i % save_frames_every == 0):
+                frame_png = frames_dir / f"frame_{i:05d}_tidx_{t_idx:05d}.png"
+                fig.savefig(frame_png)
+
+            fig.canvas.draw()
+            img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+            img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            writer.append_data(img)
+            plt.close(fig)
+
+            if (i + 1) % 20 == 0 or (i + 1) == len(idxs):
+                print(f"[progress] {exp_dir.name}: {i + 1}/{len(idxs)} frames", flush=True)
+    finally:
+        writer.close()
+
+    video_duration = len(idxs) / max(1, fps)
+    print(f"[done] wrote {video_path} ({len(idxs)} frames, {video_duration:.2f}s video for {sim_duration:.2f}s simulation)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Render 3D temperature evolution videos for experiment folders.")
+    parser.add_argument("--base-path", default="./data/new_detailed_heat_sim_f64")
+    parser.add_argument("--out-root", default="./plots/new_detailed_heat_sim_f64_3d")
+    parser.add_argument("--normalized", action="store_true", help="use normalized_heat_equation_solution.npz")
+    parser.add_argument("--fps", type=int, default=10)
+    parser.add_argument("--frame-stride", type=int, default=1, help="optional extra thinning after time-synced FPS sampling")
+    parser.add_argument("--max-frames", type=int, default=0, help="0 means all selected frames")
+    parser.add_argument("--downsample", type=int, default=1, help="spatial downsample for rendering speed")
+    parser.add_argument("--threshold-quantile", type=float, default=0.50, help="render hottest voxels above this quantile")
+    parser.add_argument("--style", choices=["voxel", "cloud", "points"], default="voxel", help="voxel=filled cubes, cloud=volumetric scatter, points=square scatter")
+    parser.add_argument("--max-cloud-points", type=int, default=12000, help="max points per frame in cloud mode")
+    parser.add_argument("--cloud-gamma", type=float, default=2.2, help="higher -> stronger focus on hot regions in cloud mode")
+    parser.add_argument("--source-marker-mode", choices=["none", "all", "core", "halo", "column"], default="none")
+    parser.add_argument("--ambient-temp", type=float, default=None, help="baseline temp; defaults to ambient estimate from t=0")
+    parser.add_argument("--heat-threshold", type=float, default=0.01, help="min normalized heat above ambient to render voxels")
+    parser.add_argument("--viz-vmax", type=float, default=5000.0, help="max temp for visualization (clips above), e.g. 5000")
+    parser.add_argument("--viz-vmin", type=float, default=None, help="min temp for visualization (default=ambient)")
+    parser.add_argument("--viz-gamma", type=float, default=1.6, help=">1 => more yellow, <1 => more red")
+    parser.add_argument("--voxel-alpha-base", type=float, default=0.06, help="base voxel alpha")
+    parser.add_argument("--voxel-alpha-scale", type=float, default=0.86, help="voxel alpha scaling")
+    parser.add_argument("--voxel-alpha-gamma", type=float, default=0.70, help="voxel alpha gamma on normalized heat")
+    parser.add_argument("--cmap", type=str, default="YlOrRd", help="matplotlib colormap name, e.g. YlOrRd, autumn_r")
+    parser.add_argument("--assume-dt", type=float, default=0.001, help="seconds per timestep if time axis is plain indices")
+    parser.add_argument("--elev", type=float, default=25.0)
+    parser.add_argument("--azim", type=float, default=-45.0)
+    parser.add_argument(
+        "--save-frames-every",
+        type=int,
+        default=0,
+        help="save every n-th selected frame as PNG in a separate frames/ folder; 0 disables",
+    )
+    parser.add_argument("--experiment", default=None, help="optional single experiment folder name")
+    parser.add_argument("--experiment-path", default=None, help="optional absolute/relative path to one experiment_* folder")
+    parser.add_argument("--last-frame-only", action="store_true", help="save only final frame as PNG (no video)")
+    args = parser.parse_args()
+
+    base = Path(args.base_path)
+    out_root = Path(args.out_root)
+
+    if args.experiment_path:
+        exps = [Path(args.experiment_path)]
+    elif args.experiment:
+        exps = [base / args.experiment]
+    else:
+        exps = list_experiment_dirs(base)
+
+    if not exps:
+        raise RuntimeError(f"No experiment_* folders found in {base}")
+
+    for exp in exps:
+        if not exp.exists():
+            print(f"[skip] experiment not found: {exp}")
+            continue
+        make_video_for_experiment(
+            exp_dir=exp,
+            out_root=out_root,
+            normalized=args.normalized,
+            fps=args.fps,
+            frame_stride=max(1, args.frame_stride),
+            max_frames=max(0, args.max_frames),
+            downsample=max(1, args.downsample),
+            threshold_quantile=min(max(args.threshold_quantile, 0.0), 1.0),
+            elev=args.elev,
+            azim=args.azim,
+            save_frames_every=max(0, args.save_frames_every),
+            style=args.style,
+            max_cloud_points=max(1, args.max_cloud_points),
+            cloud_gamma=max(1e-6, args.cloud_gamma),
+            source_marker_mode=args.source_marker_mode,
+            ambient_temp=args.ambient_temp,
+            heat_threshold=max(0.0, min(1.0, args.heat_threshold)),
+            viz_vmin=args.viz_vmin,
+            viz_vmax=args.viz_vmax,
+            viz_gamma=args.viz_gamma,
+            style_cmap=args.cmap,
+            assume_dt=max(1e-12, args.assume_dt),
+            last_frame_only=args.last_frame_only,
+            voxel_alpha_base=max(0.0, min(1.0, args.voxel_alpha_base)),
+            voxel_alpha_scale=max(0.0, min(1.0, args.voxel_alpha_scale)),
+            voxel_alpha_gamma=max(1e-6, args.voxel_alpha_gamma),
+        )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,35 +1,3 @@
-<<<<<<< HEAD
-# Geospatial Time Series
-
-Here we try to forecast temperature development in a simulated room via CNNs. Data used to train the model are simulated 
-temperature grid meshes of burning rooms.
-
-Preprocessing of new Experiment folders:
-
-use "out_to_csv.py" to translate the *.out files of one experiment to
-a *.csv-file
-
-use then  "sort_data.py" sort these gridpoints in (x,y,z) directions
-and to save a "temperature_matrices.npz" file for each experiment
-
-Train Network:
-
-Execute "train.py" to start the training of given method, the model will be
-saved in the folder "saved_models" afterwards 
-
-
-
-
-Explanation of files:
-
-"import_normalize.py" are predefined functions, that import the *.npz files
-and normalize the matrices in it.
-import_all_rooms(abl = boolean) imports all rooms and is executed in "dataset.py"
-if abl == True, the dataset will consist of derivation of the temperature
-if abl == False, the dataset will consist of the actual temperature values
-
-
-=======
 # PIT-CNN
 
 Surrogate modeling of transient 3D heat transfer using convolutional neural networks with physics-informed loss functions.
@@ -43,7 +11,7 @@ This repo contains tools to simulate heat transfer, preprocess data, train neura
 Runs a 3D transient heat equation with random rectangular heat sources (“fireplaces”).
 
 ```bash
-python heat_sim_class.py
+python -m simulation.heat_sim_class
 ```
 
 Saves results in ./data/testset/experiment_* with: <br>
@@ -58,7 +26,7 @@ fireplace_simulation_results.txt → metadata <br>
 Normalize temperature fields across all experiments.
 
 ```bash
-python preprocess.py
+python -m simulation.preprocess
 ```
 
 Computes global min/max <br>
@@ -73,10 +41,80 @@ Trained checkpoints saved in ./models/
 Run static or dynamic CNNs with physics-informed loss.
 
 ```bash
-python main.py
+python main.py --config configs/pitcnn_dynamic_config.py
 ```
 
 - Static models → PICNN_static
 
-- Dynamic models → PECNN_dynamic
->>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
+- Dynamic models → PITCNN_dynamic
+
+## 4. Train with config + `main.py`
+
+Training is controlled by Python config files.
+
+### Option A: Central dtype in `configs/train_config.py`
+
+Set only the global dtype there:
+
+- `TRAIN_DTYPE` (e.g. `torch.float32` or `torch.float64`)
+
+`main.py` and the training modules import this dtype directly, independent from the run config file.
+
+### Option B: Use a run config in `configs/`
+
+Use one of these config files for epochs/model class/run naming:
+
+```bash
+python main.py --config configs/picnn_static_config.py
+python main.py --config configs/pitcnn_dynamic_config.py
+python main.py --config configs/pitcnn_timefirst_config.py
+```
+### Notes
+
+- Static mode runs over `predicted_times` and `a_list`.
+- Dynamic mode runs over `a_list`.
+- Run artifacts are written to `runs/static/...` or `runs/dynamic/...` with a generated `run_id` and `config.json`.
+- For resume training, set the corresponding `resume_run_ids_*` lists in `main.py` (or enable auto-collect flags).
+
+## 5. Model Overview
+
+The project currently supports these model classes (configured via `model_class_name`):
+
+- `PICNN_static`: static model for a fixed prediction horizon (`predicted_time`).
+- `PITCNN_dynamic`: dynamic model with time as an additional input in latent space.
+- `PITCNN_dynamic_timefirst`: dynamic model that injects time earlier in the network.
+- `PITCNN_dynamic_batchnorm` and `PITCNN_dynamic_latenttime1`: additional dynamic variants available in `main.py` registry.
+
+All CNN model classes inherit from shared training base classes (`BaseModel` / `BaseModel_dynamic`).
+
+## 6. Physics Loss (Dynamic)
+
+For dynamic training (`CombinedLoss_dynamic`), the temporal derivative is computed via finite difference between two model predictions:
+
+- `u(t)` from `self(input, t)`
+- `u(t-Δt)` from `self(input, t_past)`
+- derivative: `(u(t) - u(t-Δt)) / (t - t_past)`
+
+This replaces the older coarse approximation based on `(output - input) / t`.
+
+### V0.2 Physics Alignment Update (2026-02-26)
+
+Recent fixes aligned dynamic training more closely with the simulation PDE:
+
+- Interior-only PDE residual:
+  - Physics residual is now computed only on interior voxels (`1:-1` in x/y/z).
+  - Boundary voxels are excluded because boundaries are Dirichlet-constrained.
+- Laplacian kernel scaling:
+  - Dynamic physics Laplacian now uses the same finite-difference scaling as simulation (`1/dx^2`, `1/dy^2`, `1/dz^2`).
+  - Grid spacing is computed from simulation geometry defaults (`Lx=6.3, Ly=3.1, Lz=1.5, Nx=64, Ny=32, Nz=16`).
+- Boundary assignment bug fix in dynamic models:
+  - In `models/pitcnn_latenttime.py`, z=0 boundary assignment was corrected from a scalar broadcast to full-plane copy:
+    - from `x_input[0,0,-1,-1,-1]`
+    - to `x_input[:, :, :, :, 0]`
+  - Applied in both `PITCNN_dynamic` and `PITCNN_dynamic_latenttime1`.
+
+### Current Known Limitation
+
+- Simulation source is defined on `:2` in z while `z=0` is also Dirichlet-clamped to ambient each step.
+- This means a source/boundary overlap exists in generated data (partially overwritten by boundary enforcement).
+- Interior-only residual reduces this mismatch during training, but it is still a data-generation consistency caveat.

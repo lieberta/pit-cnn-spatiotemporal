@@ -1,20 +1,12 @@
-<<<<<<< HEAD
-# data 
 data
-
-# models
 models
-
-#paper
-paper
-
-#plots
 plots
-
-# logs
-*.log
-terminal_output*.log
-=======
-data
-models
->>>>>>> 030630310e261920aa6eecd6588499cdf243ff92
+runs
+logs
+ignore
+__pycache__/
+*.pyc
+evaluation/predictions/
+terminal_output_main.log
+configs/
+slurm-*.out
