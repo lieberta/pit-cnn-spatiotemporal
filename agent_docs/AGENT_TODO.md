@@ -1,6 +1,6 @@
 # Agent TODO
 
-Last updated: 2026-02-26
+Last updated: 2026-03-13
 
 ## Prioritized Backlog
 
@@ -9,6 +9,9 @@ Last updated: 2026-02-26
 - [ ] Make the A/B check truly comparable: same seed, same epoch count, same code snapshot, same optimizer settings.
 - [ ] Regenerate/normalize a clean dataset with the new interior-only source placement (`z=1:3`, no x/y boundary fireplaces) before judging V0.3 fairly.
 - [ ] Decide and enforce one boundary strategy in dynamic models: copy-from-input boundaries vs explicit constant ambient boundary in normalized space.
+- [ ] Expose `source_region_weight` in the dynamic training config so source cells can be penalized harder in the PDE residual.
+  Implementation note: in `CombinedLoss_dynamic`, multiply the squared residual inside source cells by `source_region_weight` using `weight = 1 + (source_region_weight - 1) * source_mask`, then optimize `mean(weight * residual^2)` on the interior domain.
+  Suggested first A/B sweep: `source_region_weight in {1.0, 2.0, 4.0}` while keeping all other settings fixed.
 - [ ] Add a configurable physics weight (`lambda_phys`) and warmup schedule (while keeping `a` as the coarse on/off multiplier).
 - [ ] Add optional `use_past_laplacian` switch in physics loss for explicit A/B (`laplacian(output)` vs `laplacian(output_past)`), defaulting to current explicit-Euler-aligned behavior.
 - [ ] Add minimal one-batch instrumentation in dynamic training: min/max/mean for `u0`, `target`, `prediction`, and PDE residual (at first batch, plus one random batch).

@@ -199,11 +199,14 @@ def dynamic(
     data_modulo=1,
     data_max_experiments=None,
     data_experiment_offset=0,
+    physics_residual_mode=None,
 ):
 
     # a function that takes all important parameter as input, creates and trains the model
     if not loss_weight_schedule:
         raise ValueError("Dynamic training requires non-empty 'loss_weight_schedule'.")
+    if physics_residual_mode is None:
+        raise ValueError("Dynamic training requires an explicit 'physics_residual_mode'.")
     initial_lp_weight = float(loss_weight_schedule[0]["lp_weight"])
     initial_mse_weight = float(loss_weight_schedule[0]["mse_weight"])
 
@@ -250,13 +253,14 @@ def dynamic(
             "seed": seed,
             "training_dtype": dtype_name(train_dtype),
             "dataset_version": "unknown",
-            "tags": ["dynamic", f"lp{initial_lp_weight}"],
+            "tags": ["dynamic", f"lp{initial_lp_weight}", f"physmode_{physics_residual_mode}"],
             "name": name,
             # Data-sampling controls for dataset-size sweeps.
             "data_path": data_path,
             "data_modulo": int(data_modulo),
             "data_max_experiments": data_max_experiments,
             "data_experiment_offset": int(data_experiment_offset),
+            "physics_residual_mode": physics_residual_mode,
         }
         config["loss_weight_schedule"] = loss_weight_schedule
         if comment:
@@ -271,6 +275,7 @@ def dynamic(
         "epochs": epochs,
         "channels": channels,
         "name": name,
+        "physics_residual_mode": physics_residual_mode,
     }
     missing = [key for key, value in required.items() if value is None]
     if missing:
@@ -295,6 +300,7 @@ def dynamic(
     run_config = load_run_config(model_dir) or {}
     run_config["selected_experiment_folders"] = int(dataset.num_selected_experiments)
     run_config["dataset_samples"] = int(len(dataset))
+    run_config["physics_residual_mode"] = physics_residual_mode
     write_run_config(model_dir, run_config)
 
     model = model_class(c=channels).to(device=device, dtype=train_dtype)
@@ -303,7 +309,8 @@ def dynamic(
                       dataset=dataset, num_epochs=epochs, batch_size=batch,
                       learning_rate=lr, model_name=model_name, save_path=model_root,
                       run_id=run_id, channels=channels, seed=seed,
-                      resume_checkpoint_path=resume_checkpoint_path)
+                      resume_checkpoint_path=resume_checkpoint_path,
+                      physics_residual_mode=physics_residual_mode)
 
 
 if __name__ == '__main__':
@@ -330,6 +337,7 @@ if __name__ == '__main__':
     model_class_name = cfg.model_class_name
     model_name = cfg.model_name
     run_comment = cfg.run_comment
+    physics_residual_mode = getattr(cfg, "physics_residual_mode", None)
     data_path = getattr(cfg, "data_path", "./data/new_detailed_heat_sim_f64/")
     run_dataset_name = getattr(cfg, "run_dataset_name", None)
     data_modulo = int(getattr(cfg, "data_modulo", 1))
@@ -387,6 +395,11 @@ if __name__ == '__main__':
             raise ValueError(
                 "Dynamic config must define non-empty 'loss_weight_schedule'."
             )
+        if physics_residual_mode is None:
+            raise ValueError(
+                "Dynamic config must define 'physics_residual_mode'. "
+                "Expected one of: model_past, gt_past, gt_future."
+            )
         schedule_epochs = sum(int(p["epochs"]) for p in loss_weight_schedule)
         if schedule_epochs != epochs:
             raise ValueError(
@@ -441,7 +454,8 @@ if __name__ == '__main__':
                         device=device, seed=seed, train_dtype=train_dtype, comment=run_comment,
                         data_path=data_path, data_modulo=data_modulo,
                         data_max_experiments=data_max_experiments,
-                        data_experiment_offset=data_experiment_offset)
+                        data_experiment_offset=data_experiment_offset,
+                        physics_residual_mode=physics_residual_mode)
         else:
             dynamic(loss_weight_schedule=loss_weight_schedule,
                     lr=lr, batch=batch, epochs=epochs, channels=channels,
@@ -450,4 +464,5 @@ if __name__ == '__main__':
                     device=device, seed=seed, train_dtype=train_dtype, comment=run_comment,
                     data_path=data_path, data_modulo=data_modulo,
                     data_max_experiments=data_max_experiments,
-                    data_experiment_offset=data_experiment_offset)
+                    data_experiment_offset=data_experiment_offset,
+                    physics_residual_mode=physics_residual_mode)

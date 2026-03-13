@@ -10,7 +10,11 @@ class PITCNN_dynamic_timefirst(BaseModel_dynamic):
         super(PITCNN_dynamic_timefirst, self).__init__()
         self.c = c
 
-        self.conv11 = nn.Conv3d(2, c, kernel_size=3, padding=1, padding_mode="reflect")
+        # The model receives two spatial channels:
+        # - channel 0: T0
+        # - channel 1: source_field
+        # A third channel is appended internally for time conditioning.
+        self.conv11 = nn.Conv3d(3, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn11 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
         self.conv12 = nn.Conv3d(c, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn12 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
@@ -52,6 +56,8 @@ class PITCNN_dynamic_timefirst(BaseModel_dynamic):
         self.conv_end = nn.Conv3d(c, 1, kernel_size=1, padding=0, padding_mode="reflect")
 
     def forward(self, x_input, time):
+        # x_input shape: (B, 2, Nx, Ny, Nz)
+        # channel 0 = T0, channel 1 = source_field
         x = x_input
         batch, _, x_dim, y_dim, z_dim = x.shape
         time = time.view(batch, 1, 1, 1, 1)
@@ -90,10 +96,14 @@ class PITCNN_dynamic_timefirst(BaseModel_dynamic):
 
         x = self.conv_end(x)
 
-        x[:, :, 0, :, :] = x_input[:, :, 0, :, :]
-        x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
-        x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
-        x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
-        x[:, :, :, :, 0] = x_input[0, 0, -1, -1, -1]
-        x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
+        # Only the temperature channel should constrain the predicted boundary.
+        # The source field is an auxiliary input channel and must not be copied
+        # into the output.
+        temperature_t0 = x_input[:, 0:1, :, :, :]
+        x[:, :, 0, :, :] = temperature_t0[:, :, 0, :, :]
+        x[:, :, -1, :, :] = temperature_t0[:, :, -1, :, :]
+        x[:, :, :, 0, :] = temperature_t0[:, :, :, 0, :]
+        x[:, :, :, -1, :] = temperature_t0[:, :, :, -1, :]
+        x[:, :, :, :, 0] = temperature_t0[:, :, :, :, 0]
+        x[:, :, :, :, -1] = temperature_t0[:, :, :, :, -1]
         return x

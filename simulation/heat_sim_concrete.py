@@ -387,12 +387,16 @@ def write_dataset_info(out_root):
     dt = None
     num_timesteps = None
     alpha = None
+    rho = None
+    cp = None
     dx = None
     dy = None
     dz = None
     Nx = None
     Ny = None
     Nz = None
+    ambient_temp = None
+    source_power_density = None
 
     for exp_dir in sorted(experiment_dirs):
         metadata_path = os.path.join(exp_dir, "metadata.json")
@@ -421,6 +425,10 @@ def write_dataset_info(out_root):
             num_timesteps = int(meta["num_timesteps"])
         if alpha is None and "alpha" in meta:
             alpha = float(meta["alpha"])
+        if rho is None and "rho" in meta:
+            rho = float(meta["rho"])
+        if cp is None and "cp" in meta:
+            cp = float(meta["cp"])
         if dx is None and "dx" in meta:
             dx = float(meta["dx"])
         if dy is None and "dy" in meta:
@@ -433,14 +441,21 @@ def write_dataset_info(out_root):
             Ny = int(meta["Ny"])
         if Nz is None and "Nz" in meta:
             Nz = int(meta["Nz"])
+        if ambient_temp is None and "ambient_temp" in meta:
+            ambient_temp = float(meta["ambient_temp"])
+        if source_power_density is None and "source_power_density" in meta:
+            source_power_density = float(meta["source_power_density"])
 
     if global_min is None or global_max is None:
         return
 
     info = {
         "alpha": None if alpha is None else float(alpha),
+        "rho": None if rho is None else float(rho),
+        "cp": None if cp is None else float(cp),
         "min_temp": float(global_min),
         "max_temp": float(global_max),
+        "temp_range": float(global_max - global_min),
         "t_min": float(global_min),
         "t_max": float(global_max),
         "t0_min": float(global_t0_min),
@@ -453,6 +468,8 @@ def write_dataset_info(out_root):
         "Nx": None if Nx is None else int(Nx),
         "Ny": None if Ny is None else int(Ny),
         "Nz": None if Nz is None else int(Nz),
+        "ambient_temp": None if ambient_temp is None else float(ambient_temp),
+        "source_power_density": None if source_power_density is None else float(source_power_density),
     }
     with open(os.path.join(out_root, "info.json"), "w") as f:
         json.dump(info, f, indent=2)

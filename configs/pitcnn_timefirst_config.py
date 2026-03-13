@@ -6,6 +6,7 @@ lr = 0.001
 loss_weight_schedule = [
     {"epochs": 100, "lp_weight": 1.0, "mse_weight": 1.0},
 ]
+physics_residual_mode = "model_past"
 model_class_name = "PITCNN_dynamic_timefirst"
 model_name = model_class_name + "_BOTH_100ep_V0.3"
 # Data subset controls for dataset-size sweeps:

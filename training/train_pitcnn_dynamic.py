@@ -29,6 +29,7 @@ class BaseModel_dynamic(nn.Module):
         channels=None,
         seed=None,
         resume_checkpoint_path=None,
+        physics_residual_mode=None,
     ):
         tic = time.perf_counter()
 
@@ -57,19 +58,55 @@ class BaseModel_dynamic(nn.Module):
 
         if not loss_weight_schedule:
             raise ValueError("loss_weight_schedule must be provided and non-empty.")
-        min_temp = getattr(dataset, "min_temp", 20.0)
-        max_temp = getattr(dataset, "max_temp", 27373.34765625)
-        dt = float(getattr(dataset, "dt"))
+        if physics_residual_mode is None:
+            raise ValueError("physics_residual_mode must be provided explicitly for dynamic training.")
+
+        # Dataset metadata is the single source of truth for all physical and
+        # normalization constants used by the loss. No default fallbacks are
+        # allowed because silent mismatches are hard to debug later.
+        required_dataset_attributes = (
+            "min_temp",
+            "max_temp",
+            "dt",
+            "alpha",
+            "dx",
+            "dy",
+            "dz",
+            "ambient_temp",
+        )
+        missing_attributes = [name for name in required_dataset_attributes if not hasattr(dataset, name)]
+        if missing_attributes:
+            raise ValueError(
+                f"Dataset is missing required attributes for dynamic training: {missing_attributes}"
+            )
+
+        min_temp = float(dataset.min_temp)
+        max_temp = float(dataset.max_temp)
+        dt = float(dataset.dt)
+        alpha = float(dataset.alpha)
+        dx = float(dataset.dx)
+        dy = float(dataset.dy)
+        dz = float(dataset.dz)
+        ambient_temp = float(dataset.ambient_temp)
         if dt <= 0.0:
             raise ValueError(f"Invalid dataset dt: {dt}")
+
         initial_lp_weight = float(loss_weight_schedule[0]["lp_weight"])
         initial_mse_weight = float(loss_weight_schedule[0]["mse_weight"])
         criterion = CombinedLoss_dynamic(
             lp_weight=initial_lp_weight,
             mse_weight=initial_mse_weight,
             device=device,
+            alpha=alpha,
             min_temp=min_temp,
             max_temp=max_temp,
+            dx=dx,
+            dy=dy,
+            dz=dz,
+            dt=dt,
+            ambient_temp=ambient_temp,
+            source_region_weight=1.0,
+            physics_residual_mode=physics_residual_mode,
         ).to(device=device, dtype=train_dtype)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         model_dir = os.path.join(save_path, model_name)
@@ -118,28 +155,42 @@ class BaseModel_dynamic(nn.Module):
             self.train()
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input_tuple, target) in enumerate(loop):
-                input, t = input_tuple # input shape: (B, C_in, D, H, W), t shape: (B,1)
-                input = input.to(device, dtype=train_dtype)
+                # Dynamic batches carry T0, target past state, and the explicit
+                # source representation in addition to the target time. The
+                # dataloader intentionally provides both past and future ground
+                # truth frames so different physics residual variants can be
+                # tested on the same sample set.
+                input_t0, t, target_past, target_future, source_mask, source_field = input_tuple
+                input_t0 = input_t0.to(device, dtype=train_dtype)
                 t = t.to(device, dtype=train_dtype)
+                target_past = target_past.to(device, dtype=train_dtype)
+                target_future = target_future.to(device, dtype=train_dtype)
+                source_mask = source_mask.to(device, dtype=train_dtype)
+                source_field = source_field.to(device, dtype=train_dtype)
                 target = target.to(device, dtype=train_dtype)
 
-                # creates a tensor for delta_t to match tensor t
-                delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
-                t_past = t - delta_t
-                output = self(input, t)
-                first_step_mask = torch.isclose(t, delta_t, rtol=0.0, atol=1e-6)  # creates bool-mask per batch-element (shape: (B,1)), True where t ≈ delta_t, so where t_past would be ≈ 0 (with a tolerance of 1e-6 to account for floating point precision issues)
+                output = self(input_t0, t)
 
-                output_past = self(input, t_past) # computes output_past for all samples
-
-                # For samples where t_past ≈ 0, we set output_past := input, because for the first simulation step the "past output" is just the initial condition (input).
-                if first_step_mask.any():  # check if there are any samples in the batch where t_past ≈ 0
-                    # Reshape mask from (B,1) to (B,1,1,1,1), so one bool controls one full sample volume.
-                    mask_5d = first_step_mask.view(t.shape[0], 1, 1, 1, 1)
-                    # torch.where picks input where mask is True, otherwise keeps model output_past.
-                    output_past = torch.where(mask_5d, input, output_past)
+                # Only the legacy "model_past" residual requires a second model
+                # prediction at t - dt. The other residual variants intentionally
+                # use ground-truth past/future frames so optimization depends on
+                # the current output only.
+                if criterion.physics_residual_mode == "model_past":
+                    delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
+                    t_past = t - delta_t
+                    output_past = self(input_t0, t_past)
+                else:
+                    output_past = None
 
                 loss, mse_loss, physics_loss = criterion.compute_components(
-                    input, output, output_past, t, t_past, target
+                    input_t0=input_t0,
+                    output=output,
+                    output_past=output_past,
+                    target_past=target_past,
+                    target=target,
+                    target_future=target_future,
+                    source_mask=source_mask,
+                    source_field=source_field,
                 )
 
                 optimizer.zero_grad()
@@ -158,27 +209,30 @@ class BaseModel_dynamic(nn.Module):
             self.eval()
             with torch.no_grad():
                 for input_tuple, target in val_loader:
-                    input, t = input_tuple
-                    input = input.to(device, dtype=train_dtype)
+                    input_t0, t, target_past, target_future, source_mask, source_field = input_tuple
+                    input_t0 = input_t0.to(device, dtype=train_dtype)
                     t = t.to(device, dtype=train_dtype)
+                    target_past = target_past.to(device, dtype=train_dtype)
+                    target_future = target_future.to(device, dtype=train_dtype)
+                    source_mask = source_mask.to(device, dtype=train_dtype)
+                    source_field = source_field.to(device, dtype=train_dtype)
                     target = target.to(device, dtype=train_dtype)
-                    # creates a tensor for delta_t to match tensor t
-                    delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
-                    t_past = t - delta_t
-                    output = self(input, t)
-
-                    first_step_mask = torch.isclose(t, delta_t, rtol=0.0, atol=1e-6)  # creates bool-mask per batch-element (shape: (B,1)), True where t ≈ delta_t, so where t_past would be ≈ 0 (with a tolerance of 1e-6 to account for floating point precision issues)
-
-                    output_past = self(input, t_past) # computes output_past for all samples
-
-                    # For samples where t_past ≈ 0, we set output_past := input, because for the first simulation step the "past output" is just the initial condition (input).
-                    if first_step_mask.any():  # check if there are any samples in the batch where t_past ≈ 0
-                        # Reshape mask from (B,1) to (B,1,1,1,1), so one bool controls one full sample volume.
-                        mask_5d = first_step_mask.view(t.shape[0], 1, 1, 1, 1)
-                        # torch.where picks input where mask is True, otherwise keeps model output_past.
-                        output_past = torch.where(mask_5d, input, output_past)
+                    output = self(input_t0, t)
+                    if criterion.physics_residual_mode == "model_past":
+                        delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
+                        t_past = t - delta_t
+                        output_past = self(input_t0, t_past)
+                    else:
+                        output_past = None
                     loss, mse_loss, physics_loss = criterion.compute_components(
-                        input, output, output_past, t, t_past, target
+                        input_t0=input_t0,
+                        output=output,
+                        output_past=output_past,
+                        target_past=target_past,
+                        target=target,
+                        target_future=target_future,
+                        source_mask=source_mask,
+                        source_field=source_field,
                     )
                     val_loss += loss.item()
                     val_mse += mse_loss.item()
@@ -204,6 +258,7 @@ class BaseModel_dynamic(nn.Module):
                 "val_physics_loss",
                 "lp_weight",
                 "mse_weight",
+                "physics_residual_mode",
             ]
             row = {
                 "run_id": run_id or model_name,
@@ -226,6 +281,7 @@ class BaseModel_dynamic(nn.Module):
                 "val_physics_loss": avg_val_physics,
                 "lp_weight": float(criterion.lp_weight),
                 "mse_weight": float(criterion.mse_weight),
+                "physics_residual_mode": criterion.physics_residual_mode,
             }
             append_metrics_row(metrics_path, header, row)
             append_metrics_row(components_path, components_header, components_row)

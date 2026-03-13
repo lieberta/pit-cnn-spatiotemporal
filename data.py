@@ -366,12 +366,20 @@ class HeatEquationMultiDataset_dynamic(Dataset):
     Dynamic dataset for time-conditioned supervised training.
 
     Each sample contains:
-    - T0
+    - model_input with two spatial channels: [T0, source_field]
     - physical prediction time t_n
     - ground-truth past state u(t_{n-1})
+    - ground-truth future state u(t_{n+1})
     - source_mask
     - source_field
     - ground-truth target state u(t_n)
+
+    We intentionally restrict training samples to the interior time range
+    n = 1 .. N-2. This makes target_past and target_future available for every
+    sample, which is required for the three physics-residual variants:
+    - model_past
+    - gt_past
+    - gt_future
     """
 
     def __init__(
@@ -422,8 +430,9 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         file_infos = self._load_or_build_file_infos()
         self.num_selected_experiments = len(file_infos)
         for folder, store_path, num_timesteps in file_infos:
-            # predicted_time indexes the target frame u(t_n), so valid values start at 1.
-            for predicted_time in range(1, num_timesteps):
+            # Restrict samples to interior time indices so both target_past and
+            # target_future exist for every training example.
+            for predicted_time in range(1, num_timesteps - 1):
                 self.files.append((folder, store_path, predicted_time))
 
         if not self.files:
@@ -440,14 +449,18 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         source_mask = experiment_payload["source_mask"]
         source_field = experiment_payload["source_field"]
 
-        input_np = t0
+        # The model now receives both the initial temperature field and the
+        # explicit source field as two aligned spatial input channels.
+        input_np = np.stack([t0, source_field], axis=0)
         target_past_np = temperature[predicted_time - 1]
         target_np = temperature[predicted_time]
+        target_future_np = temperature[predicted_time + 1]
 
         dtype = torch.get_default_dtype()
-        input_tensor = torch.tensor(input_np, dtype=dtype).unsqueeze(0)
+        input_tensor = torch.tensor(input_np, dtype=dtype)
         target_past_tensor = torch.tensor(target_past_np, dtype=dtype).unsqueeze(0)
         target_tensor = torch.tensor(target_np, dtype=dtype).unsqueeze(0)
+        target_future_tensor = torch.tensor(target_future_np, dtype=dtype).unsqueeze(0)
         source_mask_tensor = torch.tensor(source_mask, dtype=dtype).unsqueeze(0)
         source_field_tensor = torch.tensor(source_field, dtype=dtype).unsqueeze(0)
         predicted_time_tensor = torch.tensor([predicted_time * self.dt], dtype=dtype)
@@ -455,6 +468,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             input_tensor,
             predicted_time_tensor,
             target_past_tensor,
+            target_future_tensor,
             source_mask_tensor,
             source_field_tensor,
         ), target_tensor
@@ -587,8 +601,11 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             store_path = resolve_temperature_store(folder)
             metadata = load_experiment_metadata(folder)
             num_timesteps = int(metadata["num_timesteps"]) + 1
-            if num_timesteps <= 1:
-                raise ValueError(f"Experiment '{folder}' has invalid frame count: {num_timesteps}")
+            if num_timesteps <= 2:
+                raise ValueError(
+                    f"Experiment '{folder}' must contain at least 3 frames to expose past/current/future samples, "
+                    f"got {num_timesteps}"
+                )
 
             infos.append((folder, store_path, num_timesteps))
             selected_count += 1

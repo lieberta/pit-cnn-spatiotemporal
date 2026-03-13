@@ -10,7 +10,10 @@ class PITCNN_dynamic(BaseModel_dynamic):
         super(PITCNN_dynamic, self).__init__()
         self.c = c
 
-        self.conv11 = nn.Conv3d(1, c, kernel_size=3, padding=1, padding_mode="reflect")
+        # The dynamic model now receives two aligned spatial input channels:
+        # - channel 0: initial temperature field T0
+        # - channel 1: explicit source field
+        self.conv11 = nn.Conv3d(2, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn11 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
         self.conv12 = nn.Conv3d(c, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn12 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
@@ -52,6 +55,7 @@ class PITCNN_dynamic(BaseModel_dynamic):
         self.conv_end = nn.Conv3d(c, 1, kernel_size=1, padding=0, padding_mode="reflect")
 
     def forward(self, x_input, time):
+        # x_input shape: (B, 2, Nx, Ny, Nz)
         x = x_input
 
         x = F.gelu(self.gn11(self.conv11(x)))
@@ -91,18 +95,22 @@ class PITCNN_dynamic(BaseModel_dynamic):
 
         x = self.conv_end(x)
 
-        x[:, :, 0, :, :] = x_input[:, :, 0, :, :]
-        x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
-        x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
-        x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
-        x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
-        x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
+        # Boundary values belong to the predicted temperature only, so they are
+        # copied from the temperature input channel and not from source_field.
+        temperature_t0 = x_input[:, 0:1, :, :, :]
+        x[:, :, 0, :, :] = temperature_t0[:, :, 0, :, :]
+        x[:, :, -1, :, :] = temperature_t0[:, :, -1, :, :]
+        x[:, :, :, 0, :] = temperature_t0[:, :, :, 0, :]
+        x[:, :, :, -1, :] = temperature_t0[:, :, :, -1, :]
+        x[:, :, :, :, 0] = temperature_t0[:, :, :, :, 0]
+        x[:, :, :, :, -1] = temperature_t0[:, :, :, :, -1]
         return x
 
 
 class PITCNN_dynamic_latenttime1(PITCNN_dynamic):
     def __init__(self, c=8):
         super().__init__(c=c)
+        # This variant appends only one additional scalar time channel in the bottleneck.
         self.conv_m1 = nn.Conv3d(self.c * 4 + 1, self.c * 8, kernel_size=3, padding=1, padding_mode="reflect")
 
     def forward(self, x_input, time):
@@ -145,12 +153,13 @@ class PITCNN_dynamic_latenttime1(PITCNN_dynamic):
 
         x = self.conv_end(x)
 
-        x[:, :, 0, :, :] = x_input[:, :, 0, :, :]
-        x[:, :, -1, :, :] = x_input[:, :, -1, :, :]
-        x[:, :, :, 0, :] = x_input[:, :, :, 0, :]
-        x[:, :, :, -1, :] = x_input[:, :, :, -1, :]
-        x[:, :, :, :, 0] = x_input[:, :, :, :, 0]
-        x[:, :, :, :, -1] = x_input[:, :, :, :, -1]
+        temperature_t0 = x_input[:, 0:1, :, :, :]
+        x[:, :, 0, :, :] = temperature_t0[:, :, 0, :, :]
+        x[:, :, -1, :, :] = temperature_t0[:, :, -1, :, :]
+        x[:, :, :, 0, :] = temperature_t0[:, :, :, 0, :]
+        x[:, :, :, -1, :] = temperature_t0[:, :, :, -1, :]
+        x[:, :, :, :, 0] = temperature_t0[:, :, :, :, 0]
+        x[:, :, :, :, -1] = temperature_t0[:, :, :, :, -1]
         return x
 
 
