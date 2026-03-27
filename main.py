@@ -200,6 +200,7 @@ def dynamic(
     data_max_experiments=None,
     data_experiment_offset=0,
     physics_residual_mode=None,
+    init_checkpoint_run_id=None,
 ):
 
     # a function that takes all important parameter as input, creates and trains the model
@@ -210,14 +211,35 @@ def dynamic(
     initial_lp_weight = float(loss_weight_schedule[0]["lp_weight"])
     initial_mse_weight = float(loss_weight_schedule[0]["mse_weight"])
 
-    run_id = resume_run_id or make_run_id("dynamic")
+    if resume_run_id and init_checkpoint_run_id:
+        raise ValueError("Use either resume_run_id or init_checkpoint_run_id, not both.")
+
+    run_id = make_run_id("dynamic") if init_checkpoint_run_id else (resume_run_id or make_run_id("dynamic"))
     model_name = run_id
     model_root = os.path.join(runs_root, name) if name else runs_root
     model_dir = os.path.join(model_root, model_name)
     model_pth = os.path.join(model_dir, f"{model_name}.pth")
 
     resume_checkpoint_path = None
-    if resume_run_id:
+    source_run_id = None
+    if init_checkpoint_run_id:
+        source_run_id = init_checkpoint_run_id
+        source_model_dir = find_run_dir_by_id(runs_root, init_checkpoint_run_id)
+        source_model_pth = os.path.join(source_model_dir, f"{init_checkpoint_run_id}.pth")
+        if not (os.path.exists(source_model_dir) and os.path.isfile(source_model_pth)):
+            raise FileNotFoundError(
+                f"Could not initialize from run_id='{init_checkpoint_run_id}': missing checkpoint '{source_model_pth}'."
+            )
+        resume_checkpoint_path = source_model_pth
+        source_config = load_run_config(source_model_dir)
+        if source_config:
+            lr = source_config.get("lr", lr)
+            batch = source_config.get("batch", batch)
+            channels = source_config.get("channels", channels)
+        print(
+            f"A new folder and model '{model_name}' will be created from checkpoint run '{init_checkpoint_run_id}'."
+        )
+    elif resume_run_id:
         model_dir = find_run_dir_by_id(runs_root, resume_run_id)
         model_root = os.path.dirname(model_dir)
         model_pth = os.path.join(model_dir, f"{resume_run_id}.pth")
@@ -225,7 +247,7 @@ def dynamic(
         run_id = resume_run_id
 
     # Check if the model directory and the specific model file exist
-    if os.path.exists(model_dir) and os.path.isfile(model_pth):
+    if resume_run_id and os.path.exists(model_dir) and os.path.isfile(model_pth):
         resume_checkpoint_path = model_pth
         config = load_run_config(model_dir)
         if config:
@@ -240,7 +262,8 @@ def dynamic(
         print(f"The model '{model_name}' already exists and will be trained further.")
     else:
         # If the directory or model file doesn't exist, print this message
-        print(f"A new folder and model '{model_name}' will be created.")
+        if not init_checkpoint_run_id:
+            print(f"A new folder and model '{model_name}' will be created.")
         config = {
             "run_id": run_id,
             "model_class": model_class.__name__,
@@ -253,6 +276,7 @@ def dynamic(
             "seed": seed,
             "training_dtype": dtype_name(train_dtype),
             "dataset_version": "unknown",
+            "dataset_source_run_id": source_run_id,
             "tags": ["dynamic", f"lp{initial_lp_weight}", f"physmode_{physics_residual_mode}"],
             "name": name,
             # Data-sampling controls for dataset-size sweeps.
@@ -263,6 +287,8 @@ def dynamic(
             "physics_residual_mode": physics_residual_mode,
         }
         config["loss_weight_schedule"] = loss_weight_schedule
+        if source_run_id is not None:
+            config["init_checkpoint_run_id"] = source_run_id
         if comment:
             config["comment"] = comment
         write_run_config(model_dir, config)
@@ -388,6 +414,7 @@ if __name__ == '__main__':
 
     # Dynamic parameters
     resume_run_ids_dynamic = list(getattr(cfg, "resume_run_ids_dynamic", []))
+    initialize_run_ids_dynamic = list(getattr(cfg, "initialize_run_ids_dynamic", []))
     auto_collect_dynamic = bool(getattr(cfg, "auto_collect_dynamic", False))  # True if i want to further train my existing models
 
     if inferred_mode == "dynamic":
@@ -398,7 +425,11 @@ if __name__ == '__main__':
         if physics_residual_mode is None:
             raise ValueError(
                 "Dynamic config must define 'physics_residual_mode'. "
-                "Expected one of: model_past, gt_past, gt_future."
+                "Expected one of: model_past, gt_past, gt_future, soft_physics."
+            )
+        if resume_run_ids_dynamic and initialize_run_ids_dynamic:
+            raise ValueError(
+                "Dynamic config cannot define both 'resume_run_ids_dynamic' and 'initialize_run_ids_dynamic'."
             )
         schedule_epochs = sum(int(p["epochs"]) for p in loss_weight_schedule)
         if schedule_epochs != epochs:
@@ -456,6 +487,18 @@ if __name__ == '__main__':
                         data_max_experiments=data_max_experiments,
                         data_experiment_offset=data_experiment_offset,
                         physics_residual_mode=physics_residual_mode)
+        elif initialize_run_ids_dynamic:
+            for source_run_id in initialize_run_ids_dynamic:
+                dynamic(loss_weight_schedule=loss_weight_schedule,
+                        lr=lr, batch=batch, epochs=epochs, channels=channels,
+                        model_class=selected_model_class, name=model_name,
+                        runs_root=runs_root_dynamic, resume_run_id=None,
+                        device=device, seed=seed, train_dtype=train_dtype, comment=run_comment,
+                        data_path=data_path, data_modulo=data_modulo,
+                        data_max_experiments=data_max_experiments,
+                        data_experiment_offset=data_experiment_offset,
+                        physics_residual_mode=physics_residual_mode,
+                        init_checkpoint_run_id=source_run_id)
         else:
             dynamic(loss_weight_schedule=loss_weight_schedule,
                     lr=lr, batch=batch, epochs=epochs, channels=channels,

@@ -171,11 +171,10 @@ class BaseModel_dynamic(nn.Module):
 
                 output = self(input_t0, t)
 
-                # Only the legacy "model_past" residual requires a second model
-                # prediction at t - dt. The other residual variants intentionally
-                # use ground-truth past/future frames so optimization depends on
-                # the current output only.
-                if criterion.physics_residual_mode == "model_past":
+                # The model_past and soft_physics residuals require a second
+                # model prediction at t - dt because their temporal derivative
+                # is based on consecutive model outputs.
+                if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
                     delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
                     t_past = t - delta_t
                     output_past = self(input_t0, t_past)
@@ -218,7 +217,7 @@ class BaseModel_dynamic(nn.Module):
                     source_field = source_field.to(device, dtype=train_dtype)
                     target = target.to(device, dtype=train_dtype)
                     output = self(input_t0, t)
-                    if criterion.physics_residual_mode == "model_past":
+                    if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
                         delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
                         t_past = t - delta_t
                         output_past = self(input_t0, t_past)

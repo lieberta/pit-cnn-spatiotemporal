@@ -141,6 +141,13 @@ class CombinedLoss_dynamic(nn.Module):
         (output_n - target_{n-1}) / dt - alpha * laplace(target_{n-1}) - source
     - gt_future:
         (target_{n+1} - output_n) / dt - alpha * laplace(output_n) - source
+    - soft_physics:
+        (output_n - output_{n-1}) / dt - alpha * laplace(input_t0)
+
+    soft_physics keeps the temporal derivative model-based, but anchors the
+    diffusion term to the initial condition U0 instead of to a predicted or
+    ground-truth neighboring state. The source term is omitted in this
+    residual variant.
     """
 
     def __init__(
@@ -168,7 +175,7 @@ class CombinedLoss_dynamic(nn.Module):
         self.source_region_weight = float(source_region_weight)
         self.physics_residual_mode = str(physics_residual_mode)
 
-        valid_modes = {"model_past", "gt_past", "gt_future"}
+        valid_modes = {"model_past", "gt_past", "gt_future", "soft_physics"}
         if self.physics_residual_mode not in valid_modes:
             raise ValueError(
                 f"Invalid physics_residual_mode='{self.physics_residual_mode}'. "
@@ -200,12 +207,12 @@ class CombinedLoss_dynamic(nn.Module):
 
         return (output - output_past) / self.dt
 
-    def _build_physics_terms(self, output, output_past, target_past, target_future):
+    def _build_physics_terms(self, input_t0, output, output_past, target_past, target_future):
         """
         Build the temporal derivative and Laplacian terms for the selected mode.
 
-        The three supported variants are implemented centrally here so the rest
-        of the loss stays mode-agnostic and easy to compare across runs.
+        The supported residual variants are implemented centrally here so the
+        rest of the loss stays mode-agnostic and easy to compare across runs.
         """
 
         if self.physics_residual_mode == "model_past":
@@ -218,6 +225,15 @@ class CombinedLoss_dynamic(nn.Module):
         if self.physics_residual_mode == "gt_past":
             temporal_derivative = self.temporal_derivative(output, target_past)
             laplacian_term = self.laplacian_layer(target_past)
+            return temporal_derivative, laplacian_term
+
+        if self.physics_residual_mode == "soft_physics":
+            if output_past is None:
+                raise ValueError("output_past must be provided when physics_residual_mode='soft_physics'.")
+            # Keep the temporal term model-based, but diffuse from the initial
+            # condition U0 to obtain a softer PDE anchor.
+            temporal_derivative = self.temporal_derivative(output, output_past)
+            laplacian_term = self.laplacian_layer(input_t0)
             return temporal_derivative, laplacian_term
 
         # In the gt_future variant, the model output takes the role of the
@@ -241,12 +257,9 @@ class CombinedLoss_dynamic(nn.Module):
         """
         Compute the total, MSE, and physics loss components.
 
-        input_t0 is accepted for interface clarity because the dynamic model is
-        conditioned on T0, even though the PDE residual itself depends on
-        output/output_past/source_field instead of on a thresholded input.
+        input_t0 is the normalized initial temperature field U0. The
+        soft_physics mode uses it directly in the Laplacian term.
         """
-
-        del input_t0
 
         if self.mse_weight == 0.0:
             mse = torch.zeros((), dtype=output.dtype, device=output.device)
@@ -257,6 +270,7 @@ class CombinedLoss_dynamic(nn.Module):
             physics = torch.zeros((), dtype=output.dtype, device=output.device)
         else:
             temporal_derivative, laplacian = self._build_physics_terms(
+                input_t0=input_t0,
                 output=output,
                 output_past=output_past,
                 target_past=target_past,
@@ -266,11 +280,9 @@ class CombinedLoss_dynamic(nn.Module):
             # Enforce the PDE only on interior cells because the outer faces are
             # fixed by Dirichlet boundary conditions in both simulation and loss.
             inner = (slice(None), slice(None), slice(1, -1), slice(1, -1), slice(1, -1))
-            residual_inner = (
-                temporal_derivative[inner]
-                - self.alpha * laplacian[inner]
-                - source_field[inner]
-            )
+            residual_inner = temporal_derivative[inner] - self.alpha * laplacian[inner]
+            if self.physics_residual_mode != "soft_physics":
+                residual_inner = residual_inner - source_field[inner]
 
             # The source mask is not required for the PDE itself, but it can be
             # used to up-weight residuals inside source cells if desired.
