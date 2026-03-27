@@ -18,18 +18,26 @@ def create_subfolder(folder_path: Path, subfolder_name: str):
     return subfolder_path
 
 
-def find_fire_slice_y(temp_t0):
-    found_fire = False
-    y_fire = 1
-    for x_coord in range(temp_t0.shape[0]):
-        for y_coord in range(temp_t0.shape[1]):
-            if temp_t0[x_coord, y_coord, 0] > 21:
-                y_fire = y_coord
-                found_fire = True
-                break
-        if found_fire:
-            break
-    return y_fire
+def find_fire_slice_y(source_mask):
+    """
+    Select a y-index that intersects at least one heat source.
+
+    The new dataset stores source locations explicitly in source_mask, so the
+    visualization no longer needs to infer source placement from T0 heuristics.
+    This is more robust because T0 and heat sources are intentionally stored as
+    separate fields.
+    """
+
+    source_voxels = np.argwhere(source_mask > 0.0)
+    if source_voxels.size == 0:
+        # Fall back to the first interior slice if no source voxels are present.
+        return 1
+
+    # source_mask uses the simulator axis order (Nx, Ny, Nz), so index 1 is the
+    # y-coordinate of the source voxels.
+    y_values = source_voxels[:, 1]
+    unique_y, counts = np.unique(y_values, return_counts=True)
+    return int(unique_y[np.argmax(counts)])
 
 
 def render_experiment(
@@ -39,6 +47,7 @@ def render_experiment(
     vmax_clip: float,
     output_subdir: str,
     vmin_clip: float = None,
+    subtract_ambient: bool = False,
 ):
     store_path = experiment_folder / npz_name
     if store_path.suffix == ".zarr":
@@ -49,6 +58,8 @@ def render_experiment(
             raise ImportError("zarr is required to read .zarr stores. Install with: pip install zarr")
         root = zarr.open_group(str(store_path), mode="r")
         temperature = np.asarray(root["temperature"])
+        source_mask = np.asarray(root["source_mask"]) if "source_mask" in root else None
+        ambient_temp = float(np.asarray(root["T0"]).min()) if "T0" in root else 20.0
         time_axis = np.asarray(root["time"]) if "time" in root else np.arange(temperature.shape[0], dtype=np.float64)
     else:
         if not store_path.exists():
@@ -57,6 +68,13 @@ def render_experiment(
         data = np.load(store_path)
         time_axis = data["time"] if "time" in data.files else np.arange(data["temperature"].shape[0], dtype=np.float64)
         temperature = data["temperature"]
+        source_mask = data["source_mask"] if "source_mask" in data.files else None
+        ambient_temp = float(np.min(data["T0"])) if "T0" in data.files else 20.0
+
+    if subtract_ambient:
+        # Plot temperature rise above ambient instead of absolute temperature.
+        # This makes weak spatial variations around 20 degC much easier to see.
+        temperature = temperature - ambient_temp
 
     data_min_temp = float(np.min(temperature))
     data_max_temp = float(np.max(temperature))
@@ -65,7 +83,13 @@ def render_experiment(
     if global_max_temp <= global_min_temp:
         global_max_temp = global_min_temp + 1e-6
 
-    y_fire = find_fire_slice_y(temperature[0])
+    if source_mask is not None:
+        y_fire = find_fire_slice_y(source_mask)
+    else:
+        # Backward-compatible fallback for older stores that do not contain
+        # source_mask. This keeps the script usable across legacy datasets.
+        y_fire = 1
+
     plots_folder = create_subfolder(experiment_folder, output_subdir)
     cmap = plt.get_cmap("hot").copy()
     cmap.set_under("blue")
@@ -103,6 +127,11 @@ def main():
     parser.add_argument("--vmin-clip", type=float, default=0.0, help="fixed lower color limit; values below are shown in blue")
     parser.add_argument("--vmax-clip", type=float, default=500.0, help="<=0 disables clip")
     parser.add_argument("--output-subdir", default="plots", help="subfolder inside the experiment folder")
+    parser.add_argument(
+        "--subtract-ambient",
+        action="store_true",
+        help="plot temperature rise above ambient instead of absolute temperature",
+    )
     args = parser.parse_args()
 
     base = Path(args.base_path)
@@ -127,6 +156,7 @@ def main():
             vmax_clip=args.vmax_clip,
             output_subdir=args.output_subdir,
             vmin_clip=args.vmin_clip,
+            subtract_ambient=args.subtract_ambient,
         )
 
 

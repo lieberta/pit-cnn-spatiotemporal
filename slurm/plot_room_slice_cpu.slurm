@@ -22,19 +22,28 @@ conda activate /beegfs/home/l/lieberta/venv/penn-venv/
 BASE_PATH="${BASE_PATH:-./data/testdummy}"
 EXPERIMENT="${EXPERIMENT:-experiment_15_20260223_140219}"
 STEP_EVERY="${STEP_EVERY:-10}"
+VMIN_CLIP="${VMIN_CLIP:-0.0}"
 VMAX_CLIP="${VMAX_CLIP:-500.0}"
 NORMALIZED="${NORMALIZED:-0}"
+SUBTRACT_AMBIENT="${SUBTRACT_AMBIENT:-0}"
+OUTPUT_SUBDIR="${OUTPUT_SUBDIR:-plots}"
 
 CMD=(
   python -m evaluation.plot_room_slice
   --base-path "$BASE_PATH"
   --experiment "$EXPERIMENT"
   --step-every "$STEP_EVERY"
+  --vmin-clip "$VMIN_CLIP"
   --vmax-clip "$VMAX_CLIP"
+  --output-subdir "$OUTPUT_SUBDIR"
 )
 
 if [ "$NORMALIZED" = "1" ]; then
   CMD+=(--normalized)
+fi
+
+if [ "$SUBTRACT_AMBIENT" = "1" ]; then
+  CMD+=(--subtract-ambient)
 fi
 
 echo "Running: ${CMD[*]}"

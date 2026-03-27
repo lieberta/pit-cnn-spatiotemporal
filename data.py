@@ -72,8 +72,11 @@ def load_dataset_info(base_path):
         "t_max",
         "t0_min",
         "t0_max",
+        "prediction_horizon",
         "dt",
-        "num_timesteps",
+        "num_prediction_steps",
+        "num_simulation_steps",
+        "num_stored_frames",
         "alpha",
         "rho",
         "cp",
@@ -92,7 +95,10 @@ def load_dataset_info(base_path):
     max_temp = float(info["max_temp"])
     temp_range = float(info["temp_range"])
     dt = float(info["dt"])
-    num_timesteps = int(info["num_timesteps"])
+    prediction_horizon = float(info["prediction_horizon"])
+    num_prediction_steps = int(info["num_prediction_steps"])
+    num_simulation_steps = int(info["num_simulation_steps"])
+    num_stored_frames = int(info["num_stored_frames"])
     alpha = float(info["alpha"])
     rho = float(info["rho"])
     cp = float(info["cp"])
@@ -106,8 +112,22 @@ def load_dataset_info(base_path):
         )
     if dt <= 0.0:
         raise ValueError(f"Invalid dt in '{info_path}': dt={dt}")
-    if num_timesteps <= 0:
-        raise ValueError(f"Invalid num_timesteps in '{info_path}': num_timesteps={num_timesteps}")
+    if prediction_horizon <= 0.0:
+        raise ValueError(f"Invalid prediction_horizon in '{info_path}': prediction_horizon={prediction_horizon}")
+    if num_prediction_steps <= 0:
+        raise ValueError(
+            f"Invalid num_prediction_steps in '{info_path}': num_prediction_steps={num_prediction_steps}"
+        )
+    if num_simulation_steps != num_prediction_steps + 1:
+        raise ValueError(
+            f"Inconsistent simulation-step metadata in '{info_path}': "
+            f"num_prediction_steps={num_prediction_steps}, num_simulation_steps={num_simulation_steps}"
+        )
+    if num_stored_frames != num_simulation_steps + 1:
+        raise ValueError(
+            f"Inconsistent stored-frame metadata in '{info_path}': "
+            f"num_simulation_steps={num_simulation_steps}, num_stored_frames={num_stored_frames}"
+        )
     if alpha <= 0.0:
         raise ValueError(f"Invalid alpha in '{info_path}': alpha={alpha}")
     if rho <= 0.0:
@@ -123,8 +143,11 @@ def load_dataset_info(base_path):
         "t_max": float(info["t_max"]),
         "t0_min": float(info["t0_min"]),
         "t0_max": float(info["t0_max"]),
+        "prediction_horizon": prediction_horizon,
         "dt": dt,
-        "num_timesteps": num_timesteps,
+        "num_prediction_steps": num_prediction_steps,
+        "num_simulation_steps": num_simulation_steps,
+        "num_stored_frames": num_stored_frames,
         "alpha": alpha,
         "rho": rho,
         "cp": cp,
@@ -146,7 +169,10 @@ def load_experiment_metadata(folder):
     metadata = load_json_required(metadata_path)
     required_keys = (
         "dt",
-        "num_timesteps",
+        "prediction_horizon",
+        "num_prediction_steps",
+        "num_simulation_steps",
+        "num_stored_frames",
         "alpha",
         "rho",
         "cp",
@@ -172,7 +198,10 @@ def load_experiment_metadata(folder):
 
     return {
         "dt": float(metadata["dt"]),
-        "num_timesteps": int(metadata["num_timesteps"]),
+        "prediction_horizon": float(metadata["prediction_horizon"]),
+        "num_prediction_steps": int(metadata["num_prediction_steps"]),
+        "num_simulation_steps": int(metadata["num_simulation_steps"]),
+        "num_stored_frames": int(metadata["num_stored_frames"]),
         "alpha": float(metadata["alpha"]),
         "rho": float(metadata["rho"]),
         "cp": float(metadata["cp"]),
@@ -201,7 +230,7 @@ def load_time_grid_from_metadata(base_path):
 
     info = load_dataset_info(base_path)
     dt = info["dt"]
-    return 1.0 / dt, dt, info["num_timesteps"]
+    return 1.0 / dt, dt, info["num_prediction_steps"]
 
 
 def normalize_temperature(data, min_temp, temp_range):
@@ -374,9 +403,10 @@ class HeatEquationMultiDataset_dynamic(Dataset):
     - source_field
     - ground-truth target state u(t_n)
 
-    We intentionally restrict training samples to the interior time range
-    n = 1 .. N-2. This makes target_past and target_future available for every
-    sample, which is required for the three physics-residual variants:
+    The simulator stores one additional frame at T + dt. This is intentional:
+    it allows every prediction target from dt .. T to have both a valid
+    target_past and a valid target_future. That keeps all three
+    physics-residual variants comparable on the exact same target times:
     - model_past
     - gt_past
     - gt_future
@@ -410,8 +440,11 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self.t_max = dataset_info["t_max"]
         self.t0_min = dataset_info["t0_min"]
         self.t0_max = dataset_info["t0_max"]
+        self.prediction_horizon = dataset_info["prediction_horizon"]
         self.dt = dataset_info["dt"]
-        self.num_timesteps = dataset_info["num_timesteps"]
+        self.num_prediction_steps = dataset_info["num_prediction_steps"]
+        self.num_simulation_steps = dataset_info["num_simulation_steps"]
+        self.num_stored_frames = dataset_info["num_stored_frames"]
         self.alpha = dataset_info["alpha"]
         self.rho = dataset_info["rho"]
         self.cp = dataset_info["cp"]
@@ -429,10 +462,11 @@ class HeatEquationMultiDataset_dynamic(Dataset):
 
         file_infos = self._load_or_build_file_infos()
         self.num_selected_experiments = len(file_infos)
-        for folder, store_path, num_timesteps in file_infos:
-            # Restrict samples to interior time indices so both target_past and
-            # target_future exist for every training example.
-            for predicted_time in range(1, num_timesteps - 1):
+        for folder, store_path, num_prediction_steps in file_infos:
+            # Because the dataset stores one extra future frame at T + dt, every
+            # prediction target from dt .. T can use the same sample structure:
+            # target_past = u(t-dt), target = u(t), target_future = u(t+dt).
+            for predicted_time in range(1, num_prediction_steps + 1):
                 self.files.append((folder, store_path, predicted_time))
 
         if not self.files:
@@ -463,7 +497,15 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         target_future_tensor = torch.tensor(target_future_np, dtype=dtype).unsqueeze(0)
         source_mask_tensor = torch.tensor(source_mask, dtype=dtype).unsqueeze(0)
         source_field_tensor = torch.tensor(source_field, dtype=dtype).unsqueeze(0)
-        predicted_time_tensor = torch.tensor([predicted_time * self.dt], dtype=dtype)
+        # The model receives time normalized by the requested prediction horizon T.
+        # This keeps the conditioning range stable across datasets with different
+        # absolute horizons. The physics loss still uses the physical dt from the
+        # dataset metadata, so only the model input is normalized here.
+        predicted_time_seconds = predicted_time * self.dt
+        predicted_time_tensor = torch.tensor(
+            [predicted_time_seconds / self.prediction_horizon],
+            dtype=dtype,
+        )
         return (
             input_tensor,
             predicted_time_tensor,
@@ -515,6 +557,10 @@ class HeatEquationMultiDataset_dynamic(Dataset):
 
         comparisons = {
             "dt": (metadata["dt"], self.dt),
+            "prediction_horizon": (metadata["prediction_horizon"], self.prediction_horizon),
+            "num_prediction_steps": (metadata["num_prediction_steps"], self.num_prediction_steps),
+            "num_simulation_steps": (metadata["num_simulation_steps"], self.num_simulation_steps),
+            "num_stored_frames": (metadata["num_stored_frames"], self.num_stored_frames),
             "alpha": (metadata["alpha"], self.alpha),
             "rho": (metadata["rho"], self.rho),
             "cp": (metadata["cp"], self.cp),
@@ -558,17 +604,19 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             require_keys(payload, ("modulo", "file_infos"), cache_path)
             infos = []
             for entry in payload["file_infos"]:
-                require_keys(entry, ("folder", "path", "num_timesteps"), cache_path)
+                require_keys(entry, ("folder", "path", "num_prediction_steps"), cache_path)
                 folder = str(entry["folder"])
                 path = str(entry["path"])
-                num_timesteps = int(entry["num_timesteps"])
+                num_prediction_steps = int(entry["num_prediction_steps"])
                 if not os.path.isdir(folder):
                     raise FileNotFoundError(f"Cached experiment folder is missing: {folder}")
                 if not os.path.exists(path):
                     raise FileNotFoundError(f"Cached zarr store is missing: {path}")
-                if num_timesteps <= 1:
-                    raise ValueError(f"Cached num_timesteps must be > 1 in '{cache_path}', got {num_timesteps}")
-                infos.append((folder, path, num_timesteps))
+                if num_prediction_steps <= 0:
+                    raise ValueError(
+                        f"Cached num_prediction_steps must be > 0 in '{cache_path}', got {num_prediction_steps}"
+                    )
+                infos.append((folder, path, num_prediction_steps))
             return infos
 
         infos = self._build_file_infos()
@@ -578,8 +626,8 @@ class HeatEquationMultiDataset_dynamic(Dataset):
                     {
                         "modulo": self.modulo,
                         "file_infos": [
-                            {"folder": folder, "path": path, "num_timesteps": int(num_timesteps)}
-                            for folder, path, num_timesteps in infos
+                            {"folder": folder, "path": path, "num_prediction_steps": int(num_prediction_steps)}
+                            for folder, path, num_prediction_steps in infos
                         ],
                     },
                     f,
@@ -600,14 +648,19 @@ class HeatEquationMultiDataset_dynamic(Dataset):
 
             store_path = resolve_temperature_store(folder)
             metadata = load_experiment_metadata(folder)
-            num_timesteps = int(metadata["num_timesteps"]) + 1
-            if num_timesteps <= 2:
+            num_prediction_steps = int(metadata["num_prediction_steps"])
+            num_stored_frames = int(metadata["num_stored_frames"])
+            if num_prediction_steps <= 0:
                 raise ValueError(
-                    f"Experiment '{folder}' must contain at least 3 frames to expose past/current/future samples, "
-                    f"got {num_timesteps}"
+                    f"Experiment '{folder}' must contain at least one prediction step, got {num_prediction_steps}"
+                )
+            if num_stored_frames != num_prediction_steps + 2:
+                raise ValueError(
+                    f"Experiment '{folder}' has inconsistent frame metadata: "
+                    f"num_prediction_steps={num_prediction_steps}, num_stored_frames={num_stored_frames}"
                 )
 
-            infos.append((folder, store_path, num_timesteps))
+            infos.append((folder, store_path, num_prediction_steps))
             selected_count += 1
             if self.max_experiments is not None and selected_count >= self.max_experiments:
                 break

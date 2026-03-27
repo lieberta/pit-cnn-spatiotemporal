@@ -40,9 +40,9 @@ class Laplacian3D(nn.Module):
         return F.conv3d(x_pad, self.kernel, padding=0, groups=1)
 
 
-class HeatSimulationConcrete:
+class HeatSimulation:
     """
-    3D concrete heat-conduction simulation with volumetric heat sources.
+    Generic 3D heat-conduction simulation with volumetric heat sources.
 
     The simulated PDE is:
         dT/dt = alpha * laplace(T) + Q / (rho * cp)
@@ -67,7 +67,7 @@ class HeatSimulationConcrete:
         # Time
         T=600.0,      # 10 minutes
         dt=0.1,
-        # Material (concrete-like)
+        # Material parameters
         k=1.7,        # W/(m*K)
         rho=2300.0,   # kg/m^3
         cp=880.0,     # J/(kg*K)
@@ -94,14 +94,30 @@ class HeatSimulationConcrete:
         self.Nx, self.Ny, self.Nz = int(Nx), int(Ny), int(Nz)
 
         # Time is parameterized by T and dt, mirroring the earlier 2D setup.
+        #
+        # Important semantic distinction:
+        # - T is the requested prediction horizon the model should learn up to.
+        # - We simulate one extra future step beyond T so that all three physics
+        #   residual variants can be evaluated on the exact same target times,
+        #   including the final target at t = T.
+        #
+        # Concretely, if T = 600 s and dt = 0.1 s:
+        # - prediction steps cover 0.1 s .. 600.0 s
+        # - one additional simulation step is stored at 600.1 s
+        #   solely to provide target_future for the final training sample.
         self.T = float(T)
         self.dt = float(dt)
         nt_float = self.T / self.dt
-        self.Nt = int(round(nt_float))
-        if self.Nt <= 0:
-            raise ValueError(f"Invalid Nt computed from T/dt: T={self.T}, dt={self.dt}, Nt={self.Nt}")
-        if not np.isclose(nt_float, self.Nt, rtol=0.0, atol=1e-12):
+        self.num_prediction_steps = int(round(nt_float))
+        if self.num_prediction_steps <= 0:
+            raise ValueError(
+                f"Invalid num_prediction_steps computed from T/dt: T={self.T}, dt={self.dt}, "
+                f"num_prediction_steps={self.num_prediction_steps}"
+            )
+        if not np.isclose(nt_float, self.num_prediction_steps, rtol=0.0, atol=1e-12):
             raise ValueError(f"T/dt must be an integer (within tolerance). Got T={self.T}, dt={self.dt}, T/dt={nt_float}")
+        self.num_simulation_steps = self.num_prediction_steps + 1
+        self.num_stored_frames = self.num_simulation_steps + 1
 
         # Compute grid spacing from the domain and the number of grid points.
         self.dx = self.Lx / (self.Nx - 1)
@@ -116,7 +132,12 @@ class HeatSimulationConcrete:
         self.t0_noise_smoothing_passes = int(t0_noise_smoothing_passes)
 
         # The full trajectory is stored in float64 for consistency and simplicity.
-        self.u = torch.full((self.Nt + 1, self.Nx, self.Ny, self.Nz), self.ambient_temp, dtype=torch.float64, device=device)
+        self.u = torch.full(
+            (self.num_stored_frames, self.Nx, self.Ny, self.Nz),
+            self.ambient_temp,
+            dtype=torch.float64,
+            device=device,
+        )
 
         # T0 is stored separately so it can be written to disk independently from
         # the full time trajectory. This makes the initial condition explicit.
@@ -134,8 +155,10 @@ class HeatSimulationConcrete:
     def place_fireplace(max_x, max_y):
         """Sample one rectangular fireplace footprint away from the boundary."""
 
-        width = random.randint(1, 4)
-        height = random.randint(1, 4)
+        # Keep fireplace patches visually and physically meaningful by avoiding
+        # single-cell source footprints in x/y.
+        width = random.randint(2, 4)
+        height = random.randint(2, 4)
         # Keep source patches away from x/y boundaries to preserve a clean
         # separation between source cells and fixed-temperature walls.
         top_left_x = random.randint(1, max_x - width - 1)
@@ -233,7 +256,9 @@ class HeatSimulationConcrete:
         # Convert volumetric heating from W/m^3 into a temperature-rate term in K/s.
         source_term_ks = self.source_field / (self.rho * self.cp)
 
-        for n in range(self.Nt):
+        # Simulate one extra step beyond the requested horizon T so that the
+        # final target at t = T also has a valid target_future = u(T + dt).
+        for n in range(self.num_simulation_steps):
             # Clamp the old state before applying the Laplacian so that the
             # update uses the intended Dirichlet boundary values.
             self._apply_dirichlet_boundaries(self.u[n])
@@ -254,11 +279,14 @@ class HeatSimulationConcrete:
         """Create a compact human-readable experiment summary."""
 
         return (
-            "Heat Simulation Concrete Results\n"
+            "Heat Simulation Results\n"
             f"saved_steps: {saved_steps}\n"
             f"grid: Nx={self.Nx}, Ny={self.Ny}, Nz={self.Nz}\n"
             f"dt: {self.dt}\n"
-            f"num_timesteps: {self.Nt}\n"
+            f"prediction_horizon: {self.T}\n"
+            f"num_prediction_steps: {self.num_prediction_steps}\n"
+            f"num_simulation_steps: {self.num_simulation_steps}\n"
+            f"num_stored_frames: {self.num_stored_frames}\n"
             f"T0 min_temp: {self.t0_min}\n"
             f"T0 max_temp: {self.t0_max}\n"
             f"min_temp: {self.min_temp}\n"
@@ -266,7 +294,7 @@ class HeatSimulationConcrete:
             f"processing_time: {self.tac - self.tic}\n"
         )
 
-    def save_results(self, out_root="./data/concrete", include_axes=True, chunk_t=1):
+    def save_results(self, out_root="./data/heat_sim", include_axes=True, chunk_t=1):
         """Write one experiment to disk using a zarr-based dataset layout."""
 
         if zarr is None:
@@ -315,7 +343,7 @@ class HeatSimulationConcrete:
         if include_axes:
             root.create_dataset(
                 "time",
-                data=np.linspace(0.0, self.T, self.Nt + 1, dtype=np.float64),
+                data=np.linspace(0.0, self.T + self.dt, self.num_stored_frames, dtype=np.float64),
                 overwrite=True,
             )
             root.create_dataset("x", data=np.linspace(0.0, self.Lx, self.Nx, dtype=np.float64), overwrite=True)
@@ -337,8 +365,11 @@ class HeatSimulationConcrete:
             "t_max": float(self.max_temp),
             "t0_min": float(self.t0_min),
             "t0_max": float(self.t0_max),
+            "prediction_horizon": float(self.T),
             "dt": float(self.dt),
-            "num_timesteps": int(self.Nt),
+            "num_prediction_steps": int(self.num_prediction_steps),
+            "num_simulation_steps": int(self.num_simulation_steps),
+            "num_stored_frames": int(self.num_stored_frames),
             "dx": float(self.dx),
             "dy": float(self.dy),
             "dz": float(self.dz),
@@ -385,7 +416,10 @@ def write_dataset_info(out_root):
     global_t0_min = None
     global_t0_max = None
     dt = None
-    num_timesteps = None
+    prediction_horizon = None
+    num_prediction_steps = None
+    num_simulation_steps = None
+    num_stored_frames = None
     alpha = None
     rho = None
     cp = None
@@ -421,8 +455,14 @@ def write_dataset_info(out_root):
 
         if dt is None:
             dt = float(meta["dt"])
-        if num_timesteps is None:
-            num_timesteps = int(meta["num_timesteps"])
+        if prediction_horizon is None and "prediction_horizon" in meta:
+            prediction_horizon = float(meta["prediction_horizon"])
+        if num_prediction_steps is None and "num_prediction_steps" in meta:
+            num_prediction_steps = int(meta["num_prediction_steps"])
+        if num_simulation_steps is None and "num_simulation_steps" in meta:
+            num_simulation_steps = int(meta["num_simulation_steps"])
+        if num_stored_frames is None and "num_stored_frames" in meta:
+            num_stored_frames = int(meta["num_stored_frames"])
         if alpha is None and "alpha" in meta:
             alpha = float(meta["alpha"])
         if rho is None and "rho" in meta:
@@ -460,8 +500,11 @@ def write_dataset_info(out_root):
         "t_max": float(global_max),
         "t0_min": float(global_t0_min),
         "t0_max": float(global_t0_max),
+        "prediction_horizon": None if prediction_horizon is None else float(prediction_horizon),
         "dt": float(dt),
-        "num_timesteps": int(num_timesteps),
+        "num_prediction_steps": None if num_prediction_steps is None else int(num_prediction_steps),
+        "num_simulation_steps": None if num_simulation_steps is None else int(num_simulation_steps),
+        "num_stored_frames": None if num_stored_frames is None else int(num_stored_frames),
         "dx": None if dx is None else float(dx),
         "dy": None if dy is None else float(dy),
         "dz": None if dz is None else float(dz),
@@ -478,9 +521,9 @@ def write_dataset_info(out_root):
 def run_experiment(num_fires, device):
     """Run one default experiment and write/update the dataset metadata."""
 
-    simulation = HeatSimulationConcrete(num_fires=num_fires, device=device)
+    simulation = HeatSimulation(num_fires=num_fires, device=device)
     simulation.run_simulation()
-    out_root = "./data/concrete"
+    out_root = "./data/heat_sim"
     simulation.save_results(out_root=out_root)
     write_dataset_info(out_root)
 
@@ -488,7 +531,7 @@ def run_experiment(num_fires, device):
 def load_runtime_config(config_path):
     """Load a Python config module and validate the runtime parameters."""
 
-    spec = importlib.util.spec_from_file_location("heat_sim_concrete_config", config_path)
+    spec = importlib.util.spec_from_file_location("heat_sim_config", config_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Could not load config from: {config_path}")
     module = importlib.util.module_from_spec(spec)
@@ -497,10 +540,21 @@ def load_runtime_config(config_path):
     num_fires_list = list(getattr(module, "NUM_FIRES_LIST", [10, 20, 30]))
     experiments_per_fire_count = int(getattr(module, "EXPERIMENTS_PER_FIRE_COUNT", 1))
     data_root = str(getattr(module, "DATA_ROOT", "./data"))
-    dataset_name = str(getattr(module, "DATASET_NAME", "concrete"))
+    dataset_name = str(getattr(module, "DATASET_NAME", "heat_sim"))
     total_time = float(getattr(module, "T", 600.0))
     dt = float(getattr(module, "DT", 0.1))
     device_name = str(getattr(module, "DEVICE", "auto"))
+    k = float(getattr(module, "K", 1.7))
+    rho = float(getattr(module, "RHO", 2300.0))
+    cp = float(getattr(module, "CP", 880.0))
+    ignition_temp = float(getattr(module, "IGNITION_TEMP", 600.0))
+    source_power_density = float(getattr(module, "SOURCE_POWER_DENSITY", 3.0e5))
+    lx = float(getattr(module, "Lx", 6.3))
+    ly = float(getattr(module, "Ly", 3.1))
+    lz = float(getattr(module, "Lz", 1.5))
+    nx = int(getattr(module, "Nx", 64))
+    ny = int(getattr(module, "Ny", 32))
+    nz = int(getattr(module, "Nz", 16))
 
     # Validate the config early so failed batch runs produce clear messages.
     if not num_fires_list:
@@ -513,6 +567,16 @@ def load_runtime_config(config_path):
         raise ValueError("T must be > 0.")
     if dt <= 0.0:
         raise ValueError("DT must be > 0.")
+    if k <= 0.0 or rho <= 0.0 or cp <= 0.0:
+        raise ValueError("K, RHO, and CP must all be > 0.")
+    if ignition_temp < 0.0:
+        raise ValueError("IGNITION_TEMP must be >= 0.")
+    if source_power_density < 0.0:
+        raise ValueError("SOURCE_POWER_DENSITY must be >= 0.")
+    if lx <= 0.0 or ly <= 0.0 or lz <= 0.0:
+        raise ValueError("Lx, Ly, and Lz must all be > 0.")
+    if nx <= 1 or ny <= 1 or nz <= 1:
+        raise ValueError("Nx, Ny, and Nz must all be > 1.")
 
     nt_float = total_time / dt
     nt = int(round(nt_float))
@@ -530,6 +594,17 @@ def load_runtime_config(config_path):
         "dataset_name": dataset_name,
         "T": total_time,
         "dt": dt,
+        "k": k,
+        "rho": rho,
+        "cp": cp,
+        "ignition_temp": ignition_temp,
+        "source_power_density": source_power_density,
+        "Lx": lx,
+        "Ly": ly,
+        "Lz": lz,
+        "Nx": nx,
+        "Ny": ny,
+        "Nz": nz,
         "device_name": device_name,
     }
 
@@ -543,8 +618,8 @@ def resolve_device(device_name):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run concrete heat simulations using a python config file.")
-    parser.add_argument("--config", default="configs/heat_sim_concrete_config.py", help="Path to simulation config file.")
+    parser = argparse.ArgumentParser(description="Run heat simulations using a python config file.")
+    parser.add_argument("--config", default="configs/heat_sim_config.py", help="Path to simulation config file.")
     args = parser.parse_args()
 
     cfg = load_runtime_config(args.config)
@@ -553,16 +628,31 @@ if __name__ == "__main__":
 
     print(f"Using config: {args.config}")
     print(f"Dataset: {cfg['dataset_name']} -> {cfg['out_root']}")
-    print(f"T={cfg['T']}s, dt={cfg['dt']}s, Nt={int(round(cfg['T'] / cfg['dt']))} steps")
+    print(
+        f"T={cfg['T']}s, dt={cfg['dt']}s, "
+        f"prediction_steps={int(round(cfg['T'] / cfg['dt']))}, "
+        f"stored_frames={int(round(cfg['T'] / cfg['dt'])) + 2}"
+    )
 
     for num_fires in cfg["num_fires_list"]:
         print(f"Number of fires: {num_fires}")
         for i in range(cfg["experiments_per_fire_count"]):
             print(f"Calculating experiment {i + 1}/{cfg['experiments_per_fire_count']}...")
-            simulation = HeatSimulationConcrete(
+            simulation = HeatSimulation(
                 num_fires=num_fires,
                 T=cfg["T"],
                 dt=cfg["dt"],
+                k=cfg["k"],
+                rho=cfg["rho"],
+                cp=cfg["cp"],
+                ignition_temp=cfg["ignition_temp"],
+                source_power_density=cfg["source_power_density"],
+                Lx=cfg["Lx"],
+                Ly=cfg["Ly"],
+                Lz=cfg["Lz"],
+                Nx=cfg["Nx"],
+                Ny=cfg["Ny"],
+                Nz=cfg["Nz"],
                 device=device,
             )
             simulation.run_simulation()
