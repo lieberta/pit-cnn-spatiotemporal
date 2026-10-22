@@ -9,8 +9,23 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .loss import CombinedLoss_dynamic
-from .train_utils import append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
+from .loss import CombinedLoss_dynamic, physics_residual
+from data import prepare_experiment_split
+from .train_utils import seed_everything, seed_worker, git_provenance, state_dict_hash, append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
+
+def _normalized_model_times(step_idx, dt, prediction_horizon, dtype):
+    """Convert integer steps to normalized model times, keeping dt in seconds."""
+    t_seconds = step_idx.to(dtype=dtype) * dt
+    # Subtract before casting so the first past step is exactly zero.
+    t_past_seconds = (step_idx - 1).to(dtype=dtype) * dt
+    return t_seconds / prediction_horizon, t_past_seconds / prediction_horizon
+
+
+def _anchor_initial_state(input_t0, output_past, step_idx):
+    """Use the known temperature, excluding source channels, at step zero."""
+    is_first_step = (step_idx == 1).view(-1, 1, 1, 1, 1)
+    return torch.where(is_first_step, input_t0[:, :1, ...], output_past)
+
 
 class BaseModel_dynamic(nn.Module):
     def __init__(self):
@@ -30,6 +45,9 @@ class BaseModel_dynamic(nn.Module):
         seed=None,
         resume_checkpoint_path=None,
         physics_residual_mode=None,
+        split_manifest_path=None,
+        split_seed=42,
+        training_source_counts=None,
     ):
         tic = time.perf_counter()
 
@@ -41,20 +59,49 @@ class BaseModel_dynamic(nn.Module):
         train_losses = []
         val_losses = []
 
-        shuffle = True
-        pin_memory = True
-        num_workers = 16
-
-        train_set, val_set = torch.utils.data.random_split(
-            dataset,
-            [math.ceil(len(dataset) * 0.8), math.floor(len(dataset) * 0.2)],
+        if seed is None:
+            raise ValueError("An explicit model seed is required for reproducible training.")
+        seed = int(seed)
+        seed_everything(seed)
+        model_dir = os.path.join(save_path, model_name)
+        os.makedirs(model_dir, exist_ok=True)
+        config_path = os.path.join(model_dir, "config.json")
+        subsets, manifest = prepare_experiment_split(
+            dataset, split_manifest_path, split_seed, training_source_counts
         )
+        protocol = {
+            "version": 1, "split": manifest,
+            "time_units": {"model": "t_seconds / prediction_horizon", "derivative_dt": "seconds"},
+            "first_step": "known_temperature_channel_0", "checkpoint_selection": "validation_mse",
+            "diagnostic_residual": "model_past_explicit_euler_interior",
+            "physics": {key: float(getattr(dataset, key)) for key in (
+                "dt", "prediction_horizon", "alpha", "dx", "dy", "dz", "rho", "cp", "ambient_temp"
+            )},
+        }
+        if resume_checkpoint_path:
+            source_manifest = os.path.join(os.path.dirname(resume_checkpoint_path), "protocol.json")
+            if not os.path.isfile(source_manifest):
+                raise ValueError("Legacy checkpoint has no experiment-split protocol. Train a new baseline first.")
+            with open(source_manifest) as f:
+                if json.load(f) != protocol:
+                    raise ValueError("Checkpoint split, normalization or time protocol differs from this run.")
+        with open(os.path.join(model_dir, "protocol.json"), "w") as f:
+            json.dump(protocol, f, indent=2)
+        with open(os.path.join(model_dir, "experiment_split.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+        self.experiment_protocol = protocol
+        self.experiment_seed = seed
+        train_generator = torch.Generator()
+        val_generator = torch.Generator().manual_seed(seed)
         train_loader = DataLoader(
-            dataset=train_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
+            subsets['train'], shuffle=True, batch_size=batch_size, num_workers=16,
+            pin_memory=True, generator=train_generator, worker_init_fn=seed_worker,
         )
         val_loader = DataLoader(
-            dataset=val_set, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory
+            subsets['validation'], shuffle=False, batch_size=batch_size, num_workers=16,
+            pin_memory=True, generator=val_generator, worker_init_fn=seed_worker,
         )
+        print("Experiment split: " + ", ".join(f"{k}={len(manifest[k])}" for k in ('train','validation','test')))
 
         if not loss_weight_schedule:
             raise ValueError("loss_weight_schedule must be provided and non-empty.")
@@ -68,6 +115,7 @@ class BaseModel_dynamic(nn.Module):
             "min_temp",
             "max_temp",
             "dt",
+            "prediction_horizon",
             "alpha",
             "dx",
             "dy",
@@ -83,13 +131,16 @@ class BaseModel_dynamic(nn.Module):
         min_temp = float(dataset.min_temp)
         max_temp = float(dataset.max_temp)
         dt = float(dataset.dt)
+        prediction_horizon = float(dataset.prediction_horizon)
         alpha = float(dataset.alpha)
         dx = float(dataset.dx)
         dy = float(dataset.dy)
         dz = float(dataset.dz)
         ambient_temp = float(dataset.ambient_temp)
-        if dt <= 0.0:
+        if not math.isfinite(dt) or dt <= 0.0:
             raise ValueError(f"Invalid dataset dt: {dt}")
+        if not math.isfinite(prediction_horizon) or prediction_horizon <= 0.0:
+            raise ValueError(f"Invalid dataset prediction_horizon: {prediction_horizon}")
 
         initial_lp_weight = float(loss_weight_schedule[0]["lp_weight"])
         initial_mse_weight = float(loss_weight_schedule[0]["mse_weight"])
@@ -109,9 +160,6 @@ class BaseModel_dynamic(nn.Module):
             physics_residual_mode=physics_residual_mode,
         ).to(device=device, dtype=train_dtype)
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-        model_dir = os.path.join(save_path, model_name)
-        config_path = os.path.join(model_dir, "config.json")
-
         best_val_mse = None
         best_val_physics = None
         if os.path.exists(config_path):
@@ -128,9 +176,30 @@ class BaseModel_dynamic(nn.Module):
 
         start_epoch = 0
         if resume_checkpoint_path:
+            checkpoint_metadata = torch.load(resume_checkpoint_path, map_location="cpu")
+            if checkpoint_metadata.get("protocol") != protocol:
+                raise ValueError("Checkpoint itself has incompatible experiment provenance.")
+            if checkpoint_metadata.get("seed") != seed:
+                raise ValueError("Continuation must use the same seed as its source checkpoint.")
+            del checkpoint_metadata
             start_epoch = load_checkpoint(self, optimizer, resume_checkpoint_path, device)
             print(f"Resuming from checkpoint: {resume_checkpoint_path} (start_epoch={start_epoch})")
 
+        if not resume_checkpoint_path or not os.path.exists(os.path.join(model_dir, "initial_state.pth")):
+            torch.save({"model_state_dict": self.state_dict(), "seed": seed},
+                       os.path.join(model_dir, "initial_state.pth"))
+        initial_model_state = torch.load(os.path.join(model_dir, "initial_state.pth"), map_location="cpu")
+        update_run_config(config_path, {
+            "git": git_provenance(), "protocol": protocol,
+            "loss_weight_schedule": loss_weight_schedule,
+            "physics_residual_mode": physics_residual_mode,
+            "epochs": num_epochs, "batch": batch_size, "lr": learning_rate,
+            "dataset_metadata_sha256": manifest['metadata_sha256'],
+            "normalization": manifest['normalization'],
+            "initial_state_sha256": state_dict_hash(initial_model_state['model_state_dict']), "seed": seed,
+            "train_samples": len(subsets['train']), "validation_samples": len(subsets['validation']),
+            "test_samples": len(subsets['test']),
+        })
         lp_by_epoch = []
         mse_by_epoch = []
         for phase in loss_weight_schedule:
@@ -143,6 +212,7 @@ class BaseModel_dynamic(nn.Module):
             )
 
         for epoch in range(start_epoch, num_epochs):
+            train_generator.manual_seed(seed + epoch)
             criterion.lp_weight = float(lp_by_epoch[epoch])
             criterion.mse_weight = float(mse_by_epoch[epoch])
             train_loss = 0.0
@@ -151,33 +221,40 @@ class BaseModel_dynamic(nn.Module):
             val_loss = 0.0
             val_mse = 0.0
             val_physics = 0.0
+            val_objective_physics = 0.0
+            train_samples = val_samples = 0
+            val_ic_squared_error = 0.0
+            val_ic_elements = 0
+            val_ic_max_abs_error = 0.0
 
             self.train()
             loop = tqdm(train_loader, total=len(train_loader), leave=True)
             for i, (input_tuple, target) in enumerate(loop):
                 # Dynamic batches carry T0, target past state, and the explicit
-                # source representation in addition to the target time. The
+                # source representation in addition to the integer target step. The
                 # dataloader intentionally provides both past and future ground
                 # truth frames so different physics residual variants can be
                 # tested on the same sample set.
-                input_t0, t, target_past, target_future, source_mask, source_field = input_tuple
+                input_t0, step_idx, target_past, target_future, source_mask, source_field = input_tuple
                 input_t0 = input_t0.to(device, dtype=train_dtype)
-                t = t.to(device, dtype=train_dtype)
+                step_idx = step_idx.to(device)
+                tau, tau_past = _normalized_model_times(
+                    step_idx, dt, prediction_horizon, train_dtype
+                )
                 target_past = target_past.to(device, dtype=train_dtype)
                 target_future = target_future.to(device, dtype=train_dtype)
                 source_mask = source_mask.to(device, dtype=train_dtype)
                 source_field = source_field.to(device, dtype=train_dtype)
                 target = target.to(device, dtype=train_dtype)
 
-                output = self(input_t0, t)
+                output = self(input_t0, tau)
 
                 # The model_past and soft_physics residuals require a second
-                # model prediction at t - dt because their temporal derivative
-                # is based on consecutive model outputs.
+                # model prediction at the previous discrete step. Model inputs
+                # are normalized times; the loss denominator remains physical dt.
                 if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
-                    delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
-                    t_past = t - delta_t
-                    output_past = self(input_t0, t_past)
+                    output_past = self(input_t0, tau_past)
+                    output_past = _anchor_initial_state(input_t0, output_past, step_idx)
                 else:
                     output_past = None
 
@@ -195,34 +272,39 @@ class BaseModel_dynamic(nn.Module):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                train_loss += loss.item()
-                train_mse += mse_loss.item()
-                train_physics += physics_loss.item()
+                batch_samples = target.shape[0]
+                train_samples += batch_samples
+                train_loss += loss.item() * batch_samples
+                train_mse += mse_loss.item() * batch_samples
+                train_physics += physics_loss.item() * batch_samples
 
                 loop.set_description(f"Epoch [{epoch}/{num_epochs}]")
-                loop.set_postfix(trainloss=train_loss / (i + 1))
+                loop.set_postfix(trainloss=train_loss / train_samples)
 
-            avg_train_loss = train_loss / len(train_loader)
+            avg_train_loss = train_loss / train_samples
             train_losses.append(avg_train_loss)
 
             self.eval()
             with torch.no_grad():
                 for input_tuple, target in val_loader:
-                    input_t0, t, target_past, target_future, source_mask, source_field = input_tuple
+                    input_t0, step_idx, target_past, target_future, source_mask, source_field = input_tuple
                     input_t0 = input_t0.to(device, dtype=train_dtype)
-                    t = t.to(device, dtype=train_dtype)
+                    step_idx = step_idx.to(device)
+                    tau, tau_past = _normalized_model_times(
+                        step_idx, dt, prediction_horizon, train_dtype
+                    )
                     target_past = target_past.to(device, dtype=train_dtype)
                     target_future = target_future.to(device, dtype=train_dtype)
                     source_mask = source_mask.to(device, dtype=train_dtype)
                     source_field = source_field.to(device, dtype=train_dtype)
                     target = target.to(device, dtype=train_dtype)
-                    output = self(input_t0, t)
-                    if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
-                        delta_t = torch.full_like(t, dt, device=device, dtype=train_dtype)
-                        t_past = t - delta_t
-                        output_past = self(input_t0, t_past)
-                    else:
-                        output_past = None
+                    output = self(input_t0, tau)
+                    diagnostic_past = _anchor_initial_state(
+                        input_t0, self(input_t0, tau_past), step_idx
+                    )
+                    output_past = diagnostic_past if criterion.physics_residual_mode in {
+                        "model_past", "soft_physics"
+                    } else None
                     loss, mse_loss, physics_loss = criterion.compute_components(
                         input_t0=input_t0,
                         output=output,
@@ -233,16 +315,32 @@ class BaseModel_dynamic(nn.Module):
                         source_mask=source_mask,
                         source_field=source_field,
                     )
-                    val_loss += loss.item()
-                    val_mse += mse_loss.item()
-                    val_physics += physics_loss.item()
+                    common_residual = physics_residual(
+                        output, diagnostic_past, dt, alpha, criterion.laplacian_layer, source_field
+                    )
+                    batch_samples = target.shape[0]
+                    val_samples += batch_samples
+                    val_loss += loss.item() * batch_samples
+                    val_mse += mse_loss.item() * batch_samples
+                    val_physics += common_residual.square().mean().item() * batch_samples
+                    val_objective_physics += physics_loss.item() * batch_samples
 
-            avg_val_loss = val_loss / len(val_loader)
+                    # Diagnose the model's own t=0 output independently of the
+                    # anchored residual, for every mode including MSE-only.
+                    output_initial = self(input_t0, torch.zeros_like(tau))
+                    initial_error = output_initial - input_t0[:, :1, ...]
+                    val_ic_squared_error += initial_error.square().sum().item()
+                    val_ic_elements += initial_error.numel()
+                    val_ic_max_abs_error = max(
+                        val_ic_max_abs_error, initial_error.abs().max().item()
+                    )
+
+            avg_val_loss = val_loss / val_samples
             val_losses.append(avg_val_loss)
-            avg_train_mse = train_mse / len(train_loader)
-            avg_train_physics = train_physics / len(train_loader)
-            avg_val_mse = val_mse / len(val_loader)
-            avg_val_physics = val_physics / len(val_loader)
+            avg_train_mse = train_mse / train_samples
+            avg_train_physics = train_physics / train_samples
+            avg_val_mse = val_mse / val_samples
+            avg_val_physics = val_physics / val_samples
 
             os.makedirs(model_dir, exist_ok=True)
             metrics_path = os.path.join(model_dir, "metrics.csv")
@@ -258,6 +356,7 @@ class BaseModel_dynamic(nn.Module):
                 "lp_weight",
                 "mse_weight",
                 "physics_residual_mode",
+                "val_objective_physics_loss",
             ]
             row = {
                 "run_id": run_id or model_name,
@@ -275,16 +374,35 @@ class BaseModel_dynamic(nn.Module):
                 "run_id": run_id or model_name,
                 "epoch": epoch + 1,
                 "train_mse_loss": avg_train_mse,
-                "train_physics_loss": avg_train_physics,
+                "train_physics_loss": avg_train_physics if criterion.lp_weight != 0 else None,
                 "val_mse_loss": avg_val_mse,
                 "val_physics_loss": avg_val_physics,
                 "lp_weight": float(criterion.lp_weight),
                 "mse_weight": float(criterion.mse_weight),
                 "physics_residual_mode": criterion.physics_residual_mode,
+                "val_objective_physics_loss": val_objective_physics / val_samples if criterion.lp_weight != 0 else None,
             }
             append_metrics_row(metrics_path, header, row)
             append_metrics_row(components_path, components_header, components_row)
-            best_val_mse = avg_val_mse if best_val_mse is None else min(best_val_mse, avg_val_mse)
+            # Keep diagnostics separate so resuming older runs does not change
+            # the column layout of their existing metrics CSVs.
+            val_ic_mse = val_ic_squared_error / val_ic_elements
+            append_metrics_row(
+                os.path.join(model_dir, "initial_condition_metrics.csv"),
+                ["run_id", "epoch", "val_ic_mse", "val_ic_max_abs_error"],
+                {
+                    "run_id": run_id or model_name,
+                    "epoch": epoch + 1,
+                    "val_ic_mse": val_ic_mse,
+                    "val_ic_max_abs_error": val_ic_max_abs_error,
+                },
+            )
+            print(
+                f"Initial condition (validation, normalized): "
+                f"MSE={val_ic_mse:.6e}, max_abs={val_ic_max_abs_error:.6e}"
+            )
+            is_best = best_val_mse is None or avg_val_mse < best_val_mse
+            best_val_mse = avg_val_mse if is_best else best_val_mse
             best_val_physics = avg_val_physics if best_val_physics is None else min(best_val_physics, avg_val_physics)
             update_run_config(
                 config_path,
@@ -293,7 +411,8 @@ class BaseModel_dynamic(nn.Module):
                     "best_val_physics_loss": float(best_val_physics),
                 },
             )
-            self.save_model(epoch, model_name, save_path, optimizer)
+            self.save_model(epoch, model_name, save_path, optimizer, is_best=is_best,
+                            validation_mse=avg_val_mse)
 
         metrics_path = os.path.join(save_path, model_name, "metrics.csv")
         epochs_all, train_losses_all, val_losses_all = load_loss_history_from_metrics(metrics_path)
@@ -304,7 +423,7 @@ class BaseModel_dynamic(nn.Module):
         proc_time = self.save_proc_time(model_name, tic, save_path)
         accumulate_training_duration(config_path, proc_time)
 
-    def save_model(self, epoch, model_name, save_path, optimizer):
+    def save_model(self, epoch, model_name, save_path, optimizer, is_best=False, validation_mse=None):
         model_dir = os.path.join(save_path, model_name)
         os.makedirs(model_dir, exist_ok=True)
 
@@ -323,11 +442,18 @@ class BaseModel_dynamic(nn.Module):
             "epoch": epoch,
             "model_state_dict": self.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "validation_mse": validation_mse,
+            "protocol": self.experiment_protocol,
+            "seed": self.experiment_seed,
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         }
         torch.save(checkpoint, model_path)
 
         latest_model_path = os.path.join(model_dir, f"{model_name}.pth")
         torch.save(checkpoint, latest_model_path)
+        if is_best:
+            torch.save(checkpoint, os.path.join(model_dir, "best.pth"))
 
     def save_loss_plot(self, model_name, epochs, train_losses, val_losses, save_path):
         plt.figure(figsize=(10, 5))

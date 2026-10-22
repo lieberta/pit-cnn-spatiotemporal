@@ -24,6 +24,10 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
                         state[key] = value.to(device=device, dtype=param_dtype)
                     else:
                         state[key] = value.to(device=device)
+        if "torch_rng_state" in checkpoint:
+            torch.set_rng_state(checkpoint["torch_rng_state"].cpu())
+        if checkpoint.get("cuda_rng_state") is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all([state.cpu() for state in checkpoint["cuda_rng_state"]])
         start_epoch = checkpoint.get("epoch", -1) + 1
         return start_epoch
     model.load_state_dict(checkpoint)
@@ -115,3 +119,53 @@ def update_run_config(config_path, updates):
         return False
 
     return True
+
+
+def seed_everything(seed):
+    """Seed independent runs identically before model construction."""
+    import random
+    import numpy as np
+    os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True)
+
+
+def seed_worker(worker_id):
+    """Seed Python/NumPy from the DataLoader's independent generator."""
+    import random
+    import numpy as np
+    seed = torch.initial_seed() % (2**32)
+    random.seed(seed)
+    np.random.seed(seed)
+
+
+def git_provenance():
+    """Record the committed revision and whether local files differ."""
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(root), *args])
+    status = git('status', '--porcelain').decode()
+    return dict(commit=git('rev-parse', 'HEAD').decode().strip(), dirty=bool(status),
+                status=status, tracked_diff_sha256=hashlib.sha256(git('diff', 'HEAD')).hexdigest())
+
+
+def state_dict_hash(state_dict):
+    import hashlib
+    digest = hashlib.sha256()
+    for name, tensor in state_dict.items():
+        digest.update(name.encode())
+        digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+    return digest.hexdigest()
+
+
+def model_state_hash(model):
+    return state_dict_hash(model.state_dict())

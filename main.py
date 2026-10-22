@@ -8,6 +8,7 @@ from models.pitcnn_timefirst import PITCNN_dynamic_timefirst
 from data import HeatEquationMultiDataset, HeatEquationMultiDataset_dynamic
 import torch
 from training.loss import CombinedLoss
+from training.train_utils import seed_everything
 import os
 import json
 import datetime
@@ -201,6 +202,9 @@ def dynamic(
     data_experiment_offset=0,
     physics_residual_mode=None,
     init_checkpoint_run_id=None,
+    split_manifest_path=None,
+    split_seed=42,
+    training_source_counts=None,
 ):
 
     # a function that takes all important parameter as input, creates and trains the model
@@ -317,6 +321,7 @@ def dynamic(
         modulo=int(data_modulo),
         max_experiments=data_max_experiments,
         experiment_offset=int(data_experiment_offset),
+        use_index_cache=False,
     )
     print(
         f"Selected experiment folders: {dataset.num_selected_experiments} "
@@ -329,6 +334,7 @@ def dynamic(
     run_config["physics_residual_mode"] = physics_residual_mode
     write_run_config(model_dir, run_config)
 
+    seed_everything(seed)
     model = model_class(c=channels).to(device=device, dtype=train_dtype)
     print(f'Train Model:')
     model.train_model(loss_weight_schedule=loss_weight_schedule,
@@ -336,7 +342,9 @@ def dynamic(
                       learning_rate=lr, model_name=model_name, save_path=model_root,
                       run_id=run_id, channels=channels, seed=seed,
                       resume_checkpoint_path=resume_checkpoint_path,
-                      physics_residual_mode=physics_residual_mode)
+                      physics_residual_mode=physics_residual_mode,
+                      split_manifest_path=split_manifest_path, split_seed=split_seed,
+                      training_source_counts=training_source_counts)
 
 
 if __name__ == '__main__':
@@ -377,14 +385,13 @@ if __name__ == '__main__':
     print(f'device = {device}')
     print('Okaaay - Let\'s go...')
 
-    seed = None  # Set to an int for reproducible runs.
-    
-    if seed is None:
-        seed = random.randint(1, 1000000)
-        print(f'No seed provided. Generated random seed = {seed}')
-    else:
-        print(f'Using provided seed = {seed}')
-    torch.manual_seed(seed)
+    seed = int(cfg.seed) if model_class_name != "PICNN_static" else int(getattr(cfg, "seed", 42))
+    seed_everything(seed)
+    print(f'Using seed = {seed}')
+    if model_class_name != "PICNN_static":
+        split_options = dict(split_manifest_path=cfg.split_manifest_path,
+                             split_seed=int(cfg.split_seed),
+                             training_source_counts=cfg.training_source_counts)
 
     # Validate model_class_name and determine mode
     if model_class_name not in MODEL_CLASS_REGISTRY:
@@ -486,7 +493,7 @@ if __name__ == '__main__':
                         data_path=data_path, data_modulo=data_modulo,
                         data_max_experiments=data_max_experiments,
                         data_experiment_offset=data_experiment_offset,
-                        physics_residual_mode=physics_residual_mode)
+                        physics_residual_mode=physics_residual_mode, **split_options)
         elif initialize_run_ids_dynamic:
             for source_run_id in initialize_run_ids_dynamic:
                 dynamic(loss_weight_schedule=loss_weight_schedule,
@@ -498,7 +505,7 @@ if __name__ == '__main__':
                         data_max_experiments=data_max_experiments,
                         data_experiment_offset=data_experiment_offset,
                         physics_residual_mode=physics_residual_mode,
-                        init_checkpoint_run_id=source_run_id)
+                        init_checkpoint_run_id=source_run_id, **split_options)
         else:
             dynamic(loss_weight_schedule=loss_weight_schedule,
                     lr=lr, batch=batch, epochs=epochs, channels=channels,
@@ -508,4 +515,4 @@ if __name__ == '__main__':
                     data_path=data_path, data_modulo=data_modulo,
                     data_max_experiments=data_max_experiments,
                     data_experiment_offset=data_experiment_offset,
-                    physics_residual_mode=physics_residual_mode)
+                    physics_residual_mode=physics_residual_mode, **split_options)

@@ -1,0 +1,147 @@
+[
+  {
+    "experiment": "experiment_15_20260223_140219",
+    "boundary_mse_floor": 4.423597806403007e-06,
+    "hot_boundary_cells": 83
+  },
+  {
+    "experiment": "experiment_15_20260223_140407",
+    "boundary_mse_floor": 5.969192220688394e-06,
+    "hot_boundary_cells": 112
+  },
+  {
+    "experiment": "experiment_15_20260223_140556",
+    "boundary_mse_floor": 6.502155811821286e-06,
+    "hot_boundary_cells": 122
+  },
+  {
+    "experiment": "experiment_15_20260223_140745",
+    "boundary_mse_floor": 5.382932270442212e-06,
+    "hot_boundary_cells": 101
+  },
+  {
+    "experiment": "experiment_15_20260223_140932",
+    "boundary_mse_floor": 5.756006784235238e-06,
+    "hot_boundary_cells": 108
+  },
+  {
+    "experiment": "experiment_15_20260223_141119",
+    "boundary_mse_floor": 7.141712121180758e-06,
+    "hot_boundary_cells": 134
+  },
+  {
+    "experiment": "experiment_15_20260223_141309",
+    "boundary_mse_floor": 4.583486883742875e-06,
+    "hot_boundary_cells": 86
+  },
+  {
+    "experiment": "experiment_15_20260223_141457",
+    "boundary_mse_floor": 5.329635911328924e-06,
+    "hot_boundary_cells": 100
+  },
+  {
+    "experiment": "experiment_15_20260223_141646",
+    "boundary_mse_floor": 4.743375961082742e-06,
+    "hot_boundary_cells": 89
+  },
+  {
+    "experiment": "experiment_15_20260223_141835",
+    "boundary_mse_floor": 4.423597806403007e-06,
+    "hot_boundary_cells": 83
+  },
+  {
+    "experiment": "experiment_20_20260223_142025",
+    "boundary_mse_floor": 6.502155811821287e-06,
+    "hot_boundary_cells": 122
+  },
+  {
+    "experiment": "experiment_20_20260223_142211",
+    "boundary_mse_floor": 6.448859452707997e-06,
+    "hot_boundary_cells": 121
+  },
+  {
+    "experiment": "experiment_20_20260223_142358",
+    "boundary_mse_floor": 7.088415762067469e-06,
+    "hot_boundary_cells": 133
+  },
+  {
+    "experiment": "experiment_20_20260223_142546",
+    "boundary_mse_floor": 7.727972071426939e-06,
+    "hot_boundary_cells": 145
+  },
+  {
+    "experiment": "experiment_20_20260223_142733",
+    "boundary_mse_floor": 7.408193916747203e-06,
+    "hot_boundary_cells": 139
+  },
+  {
+    "experiment": "experiment_20_20260223_142923",
+    "boundary_mse_floor": 6.981823043840889e-06,
+    "hot_boundary_cells": 131
+  },
+  {
+    "experiment": "experiment_20_20260223_143110",
+    "boundary_mse_floor": 6.448859452707997e-06,
+    "hot_boundary_cells": 121
+  },
+  {
+    "experiment": "experiment_20_20260223_143257",
+    "boundary_mse_floor": 5.009857756649188e-06,
+    "hot_boundary_cells": 94
+  },
+  {
+    "experiment": "experiment_20_20260223_143446",
+    "boundary_mse_floor": 7.514786634973782e-06,
+    "hot_boundary_cells": 141
+  },
+  {
+    "experiment": "experiment_20_20260223_143634",
+    "boundary_mse_floor": 7.834564789653517e-06,
+    "hot_boundary_cells": 147
+  },
+  {
+    "experiment": "experiment_25_20260223_143821",
+    "boundary_mse_floor": 8.687306535466145e-06,
+    "hot_boundary_cells": 163
+  },
+  {
+    "experiment": "experiment_25_20260223_144008",
+    "boundary_mse_floor": 9.64664099950535e-06,
+    "hot_boundary_cells": 181
+  },
+  {
+    "experiment": "experiment_25_20260223_144154",
+    "boundary_mse_floor": 9.166973767485749e-06,
+    "hot_boundary_cells": 172
+  },
+  {
+    "experiment": "experiment_25_20260223_144342",
+    "boundary_mse_floor": 7.674675712313649e-06,
+    "hot_boundary_cells": 144
+  },
+  {
+    "experiment": "experiment_25_20260223_144528",
+    "boundary_mse_floor": 9.540048281278772e-06,
+    "hot_boundary_cells": 179
+  },
+  {
+    "experiment": "experiment_25_20260223_144716",
+    "boundary_mse_floor": 9.753233717731928e-06,
+    "hot_boundary_cells": 183
+  },
+  {
+    "experiment": "experiment_25_20260223_144903",
+    "boundary_mse_floor": 7.727972071426939e-06,
+    "hot_boundary_cells": 145
+  },
+  {
+    "experiment": "experiment_25_20260223_145049",
+    "boundary_mse_floor": 9.966419154185088e-06,
+    "hot_boundary_cells": 187
+  },
+  {
+    "experiment": "experiment_25_20260223_145235",
+    "boundary_mse_floor": 8.154342944333254e-06,
+    "hot_boundary_cells": 153
+  }
+]

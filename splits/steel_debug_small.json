@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "metadata_sha256": "c2e267d64734412b84c918d140c1d644c91ca99d6f24aca80338526871e7bb5b",
+  "training_source_counts": null,
+  "train": [
+    "experiment_20_20260313_144852",
+    "experiment_20_20260313_145326",
+    "experiment_22_20260313_144854",
+    "experiment_22_20260313_144856"
+  ],
+  "validation": [
+    "experiment_20_20260313_145324"
+  ],
+  "test": [
+    "experiment_22_20260313_145328"
+  ],
+  "normalization": {
+    "min_temp": 19.76991767551889,
+    "max_temp": 121.2258399942908,
+    "temp_range": 101.45592231877191,
+    "fitted_on": "train"
+  }
+}

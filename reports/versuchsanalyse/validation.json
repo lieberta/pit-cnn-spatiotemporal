@@ -1,0 +1,9 @@
+{
+  "run_configs": 93,
+  "raw_metric_rows": 2000,
+  "unique_run_epoch_pairs": 1942,
+  "weighted_total_checks": 1468,
+  "weighted_total_mismatches": [],
+  "pdf_pages": 21,
+  "pdf_out_of_bounds_text_blocks": []
+}

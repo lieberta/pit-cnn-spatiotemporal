@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "metadata_sha256": "48539a4a4ff51e7883ee67f411dc4ec29c88fc0238dbb32f9ce3392321e196b0",
+  "training_source_counts": null,
+  "train": [
+    "experiment_18_20260323_101401",
+    "experiment_18_20260323_101405",
+    "experiment_18_20260323_101409",
+    "experiment_18_20260323_101411",
+    "experiment_20_20260323_101413",
+    "experiment_20_20260323_101415",
+    "experiment_20_20260323_101417",
+    "experiment_20_20260323_101423",
+    "experiment_22_20260323_101429",
+    "experiment_22_20260323_101431",
+    "experiment_22_20260323_101433",
+    "experiment_22_20260323_101435",
+    "experiment_22_20260323_101439",
+    "experiment_22_20260323_101441",
+    "experiment_22_20260323_101443",
+    "experiment_24_20260323_101445",
+    "experiment_24_20260323_101447",
+    "experiment_24_20260323_101451",
+    "experiment_24_20260323_101453",
+    "experiment_24_20260323_101455",
+    "experiment_24_20260323_101456",
+    "experiment_24_20260323_101458"
+  ],
+  "validation": [
+    "experiment_18_20260323_101358",
+    "experiment_18_20260323_101400",
+    "experiment_20_20260323_101419",
+    "experiment_20_20260323_101427"
+  ],
+  "test": [
+    "experiment_18_20260323_101403",
+    "experiment_18_20260323_101407",
+    "experiment_20_20260323_101421",
+    "experiment_20_20260323_101425",
+    "experiment_22_20260323_101437",
+    "experiment_24_20260323_101449"
+  ],
+  "normalization": {
+    "min_temp": 19.7373091693751,
+    "max_temp": 119.81875303121228,
+    "temp_range": 100.08144386183719,
+    "fitted_on": "train"
+  }
+}

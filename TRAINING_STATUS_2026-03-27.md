@@ -2,6 +2,8 @@
 
 Stand: 2026-03-27
 
+Nachtrag: 2026-03-30
+
 Diese Datei dokumentiert, welche Slurm-Jobs aktuell eingereicht wurden, was sie trainieren und wo ihre Ergebnisse bzw. Logs gespeichert werden.
 
 ## Slurm-Logs
@@ -190,6 +192,76 @@ Dabei ist:
   - `<neuer_run_id>` wird erst beim tatsächlichen Start erzeugt und hat das Format `dynamic_YYYYMMDD-HHMMSS_xxxxxx`.
   - In `config.json` des neuen Runs wird zusätzlich gespeichert, dass der Lauf aus `dynamic_20260323-104107_7e2ea6` initialisiert wurde.
 
+## Nachtrag 2026-03-30
+
+Die folgenden Jobs wurden nach der ursprünglichen Statusdatei zusätzlich eingereicht.
+
+### 8. Soft-Physics-Run erneut gestartet nach Fix des Channel-Mismatch
+
+- Slurm-Job-ID: `953818`
+- Job-Name: `tf_soft14`
+- Aktueller Status beim Eintrag: `RUNNING`
+- Config: `configs/pitcnn_timefirst_steel_medium_soft_physics_14ep.py`
+- Training:
+  - Datensatz: `./data/steel_train_medium/`
+  - Modellklasse: `PITCNN_dynamic`
+  - Epochen: `14`
+  - Loss-Schedule: 14 Epochen mit `lp_weight = 1.0`, `mse_weight = 1.0`
+  - Physics-Residual: `soft_physics`
+  - Residualform: `(output_n - output_{n-1}) / dt - alpha * laplace(U0)`
+  - Besonderheit: In `soft_physics` wird nach dem Fix nur noch Kanal 0 von `input_t0`, also die initiale Temperaturverteilung `U0`, an den Laplace-Term übergeben. Zusätzliche Kanäle wie das Heat-Source-Feld werden dort ignoriert.
+- Modellname / Zielordner:
+  - Modellwurzel: `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_BOTH_soft_physics_14ep_lp1/`
+  - Neuer Run-Ordner: `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_BOTH_soft_physics_14ep_lp1/<run_id>/`
+
+### 9. Physics-only-Run, 14 Epochen, `physics_residual_mode = gt_past`
+
+- Slurm-Job-ID: `954005`
+- Job-Name: `tf_gpast14p`
+- Aktueller Status beim Eintrag: `RUNNING`
+- Config: `configs/pitcnn_timefirst_steel_medium_gt_past_phys_only_14ep.py`
+- Training:
+  - Datensatz: `./data/steel_train_medium/`
+  - Modellklasse: `PITCNN_dynamic`
+  - Epochen: `14`
+  - Loss-Schedule: 14 Epochen mit `lp_weight = 1.0`, `mse_weight = 0.0`
+  - Physics-Residual: `gt_past`
+- Modellname / Zielordner:
+  - Modellwurzel: `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_PHYS_ONLY_gt_past_14ep_lp1/`
+  - Neuer Run-Ordner: `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_PHYS_ONLY_gt_past_14ep_lp1/<run_id>/`
+- Erwartete Artefakte im Run-Ordner:
+  - `config.json`
+  - `metrics.csv`
+  - `loss_components.csv`
+  - `<run_id>.pth`
+  - `epoch_*.pth`
+  - `losses_plot_<run_id>.png`
+  - `proc_time_<run_id>.txt`
+
+### 10. Physics-only-Run, 14 Epochen, `physics_residual_mode = gt_future`
+
+- Slurm-Job-ID: `954004`
+- Job-Name: `tf_gfut14p`
+- Aktueller Status beim Eintrag: `RUNNING`
+- Config: `configs/pitcnn_timefirst_steel_medium_gt_future_phys_only_14ep.py`
+- Training:
+  - Datensatz: `./data/steel_train_medium/`
+  - Modellklasse: `PITCNN_dynamic`
+  - Epochen: `14`
+  - Loss-Schedule: 14 Epochen mit `lp_weight = 1.0`, `mse_weight = 0.0`
+  - Physics-Residual: `gt_future`
+- Modellname / Zielordner:
+  - Modellwurzel: `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_PHYS_ONLY_gt_future_14ep_lp1/`
+  - Neuer Run-Ordner: `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_PHYS_ONLY_gt_future_14ep_lp1/<run_id>/`
+- Erwartete Artefakte im Run-Ordner:
+  - `config.json`
+  - `metrics.csv`
+  - `loss_components.csv`
+  - `<run_id>.pth`
+  - `epoch_*.pth`
+  - `losses_plot_<run_id>.png`
+  - `proc_time_<run_id>.txt`
+
 ## Zusammenfassung der Speicherorte
 
 Bereits existierender Ordner, der weitertrainiert wird:
@@ -204,6 +276,8 @@ Neue Modellwurzeln für frisch erzeugte Runs:
 - `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_FROM_MSE20_TO_gt_future_10ep_lp1/`
 - `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_FROM_MSE20_TO_gt_past_10ep_lp1/`
 - `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_BOTH_soft_physics_14ep_lp1/`
+- `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_PHYS_ONLY_gt_past_14ep_lp1/`
+- `runs/dynamic/steel_train_medium/PITCNN_dynamic_STEEL_MEDIUM_PHYS_ONLY_gt_future_14ep_lp1/`
 
 ## Konfigurationsdateien
 
@@ -216,3 +290,5 @@ Die zugehörigen Configs liegen hier:
 - `configs/pitcnn_timefirst_steel_medium_from_mse20_to_gt_future_10ep.py`
 - `configs/pitcnn_timefirst_steel_medium_from_mse20_to_gt_past_10ep.py`
 - `configs/pitcnn_timefirst_steel_medium_soft_physics_14ep.py`
+- `configs/pitcnn_timefirst_steel_medium_gt_past_phys_only_14ep.py`
+- `configs/pitcnn_timefirst_steel_medium_gt_future_phys_only_14ep.py`

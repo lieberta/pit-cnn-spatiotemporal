@@ -3,6 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def physics_residual(u_now, u_past, dt_seconds, alpha, laplacian, source):
+    """Explicit-Euler residual in normalized temperature/second, interior only."""
+    residual = (u_now - u_past) / dt_seconds - alpha * laplacian(u_past) - source
+    return residual[:, :, 1:-1, 1:-1, 1:-1]
+
+
 class Laplacian3DLayer(nn.Module):
     """
     Fixed 3D Laplacian layer that mirrors the simulator discretization.
@@ -16,7 +22,7 @@ class Laplacian3DLayer(nn.Module):
         super().__init__()
         self.ambient_temp_norm = float(ambient_temp_norm)
 
-        kernel = torch.zeros((1, 1, 3, 3, 3), dtype=torch.float32)
+        kernel = torch.zeros((1, 1, 3, 3, 3), dtype=torch.get_default_dtype())
         kernel[0, 0, 1, 1, 1] = -2.0 * ((1.0 / dx ** 2) + (1.0 / dy ** 2) + (1.0 / dz ** 2))
         kernel[0, 0, 1, 1, 0] = kernel[0, 0, 1, 1, 2] = 1.0 / dz ** 2
         kernel[0, 0, 1, 0, 1] = kernel[0, 0, 1, 2, 1] = 1.0 / dy ** 2
@@ -142,11 +148,13 @@ class CombinedLoss_dynamic(nn.Module):
     - gt_future:
         (target_{n+1} - output_n) / dt - alpha * laplace(output_n) - source
     - soft_physics:
-        (output_n - output_{n-1}) / dt - alpha * laplace(input_t0)
+        (output_n - output_{n-1}) / dt - alpha * laplace(U0)
 
     soft_physics keeps the temporal derivative model-based, but anchors the
-    diffusion term to the initial condition U0 instead of to a predicted or
-    ground-truth neighboring state. The source term is omitted in this
+    diffusion term to the initial temperature field U0 instead of to a
+    predicted or ground-truth neighboring state. If the model input contains
+    additional channels such as a heat-source field, only the temperature
+    channel is used for the Laplacian. The source term is omitted in this
     residual variant.
     """
 
@@ -207,6 +215,23 @@ class CombinedLoss_dynamic(nn.Module):
 
         return (output - output_past) / self.dt
 
+    def _extract_soft_physics_temperature(self, input_t0):
+        """
+        Return only the initial temperature channel U0 for soft_physics.
+
+        Dynamic inputs may carry extra channels, for example an explicit heat
+        source field alongside the temperature field. The soft-physics Laplacian
+        should only see the initial temperature distribution.
+        """
+
+        if input_t0.ndim != 5:
+            raise ValueError(
+                f"Expected input_t0 with shape (B, C, Nx, Ny, Nz), got shape {tuple(input_t0.shape)}."
+            )
+        if input_t0.shape[1] < 1:
+            raise ValueError("input_t0 must contain at least one channel for the initial temperature field.")
+        return input_t0[:, :1, ...]
+
     def _build_physics_terms(self, input_t0, output, output_past, target_past, target_future):
         """
         Build the temporal derivative and Laplacian terms for the selected mode.
@@ -231,9 +256,10 @@ class CombinedLoss_dynamic(nn.Module):
             if output_past is None:
                 raise ValueError("output_past must be provided when physics_residual_mode='soft_physics'.")
             # Keep the temporal term model-based, but diffuse from the initial
-            # condition U0 to obtain a softer PDE anchor.
+            # temperature field U0 to obtain a softer PDE anchor.
             temporal_derivative = self.temporal_derivative(output, output_past)
-            laplacian_term = self.laplacian_layer(input_t0)
+            input_temperature_t0 = self._extract_soft_physics_temperature(input_t0)
+            laplacian_term = self.laplacian_layer(input_temperature_t0)
             return temporal_derivative, laplacian_term
 
         # In the gt_future variant, the model output takes the role of the
@@ -257,32 +283,29 @@ class CombinedLoss_dynamic(nn.Module):
         """
         Compute the total, MSE, and physics loss components.
 
-        input_t0 is the normalized initial temperature field U0. The
-        soft_physics mode uses it directly in the Laplacian term.
+        input_t0 contains the dynamic model input at t0. In soft_physics mode,
+        only the normalized initial temperature field U0 (channel 0) is used in
+        the Laplacian term.
         """
 
-        if self.mse_weight == 0.0:
-            mse = torch.zeros((), dtype=output.dtype, device=output.device)
-        else:
-            mse = self.mse_loss(output, target)
+        # Always measure data fidelity, including physics-only training.
+        mse = self.mse_loss(output, target)
 
         if self.lp_weight == 0.0:
             physics = torch.zeros((), dtype=output.dtype, device=output.device)
         else:
-            temporal_derivative, laplacian = self._build_physics_terms(
-                input_t0=input_t0,
-                output=output,
-                output_past=output_past,
-                target_past=target_past,
-                target_future=target_future,
-            )
-
-            # Enforce the PDE only on interior cells because the outer faces are
-            # fixed by Dirichlet boundary conditions in both simulation and loss.
             inner = (slice(None), slice(None), slice(1, -1), slice(1, -1), slice(1, -1))
-            residual_inner = temporal_derivative[inner] - self.alpha * laplacian[inner]
-            if self.physics_residual_mode != "soft_physics":
-                residual_inner = residual_inner - source_field[inner]
+            if self.physics_residual_mode == "model_past":
+                residual_inner = physics_residual(
+                    output, output_past, self.dt, self.alpha, self.laplacian_layer, source_field
+                )
+            else:
+                temporal_derivative, laplacian = self._build_physics_terms(
+                    input_t0, output, output_past, target_past, target_future
+                )
+                residual_inner = temporal_derivative[inner] - self.alpha * laplacian[inner]
+                if self.physics_residual_mode != "soft_physics":
+                    residual_inner = residual_inner - source_field[inner]
 
             # The source mask is not required for the PDE itself, but it can be
             # used to up-weight residuals inside source cells if desired.

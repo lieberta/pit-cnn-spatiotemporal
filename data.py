@@ -396,7 +396,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
 
     Each sample contains:
     - model_input with two spatial channels: [T0, source_field]
-    - physical prediction time t_n
+    - integer prediction step index n (torch.long, shape (1,))
     - ground-truth past state u(t_{n-1})
     - ground-truth future state u(t_{n+1})
     - source_mask
@@ -497,18 +497,12 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         target_future_tensor = torch.tensor(target_future_np, dtype=dtype).unsqueeze(0)
         source_mask_tensor = torch.tensor(source_mask, dtype=dtype).unsqueeze(0)
         source_field_tensor = torch.tensor(source_field, dtype=dtype).unsqueeze(0)
-        # The model receives time normalized by the requested prediction horizon T.
-        # This keeps the conditioning range stable across datasets with different
-        # absolute horizons. The physics loss still uses the physical dt from the
-        # dataset metadata, so only the model input is normalized here.
-        predicted_time_seconds = predicted_time * self.dt
-        predicted_time_tensor = torch.tensor(
-            [predicted_time_seconds / self.prediction_horizon],
-            dtype=dtype,
-        )
+        # Keep the discrete index exact; the trainer derives model times using
+        # this dataset's physical dt and prediction horizon.
+        step_idx_tensor = torch.tensor([predicted_time], dtype=torch.long)
         return (
             input_tensor,
-            predicted_time_tensor,
+            step_idx_tensor,
             target_past_tensor,
             target_future_tensor,
             source_mask_tensor,
@@ -665,3 +659,75 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             if self.max_experiments is not None and selected_count >= self.max_experiments:
                 break
         return infos
+
+
+def prepare_experiment_split(dataset, manifest_path=None, seed=42, training_source_counts=None):
+    """Persist disjoint experiment groups and fit normalization on training only.
+
+    A manifest is immutable for a given selection and metadata snapshot. Separate
+    model seeds reuse it. Optional source counts restrict training/validation;
+    all other counts become held-out extrapolation experiments.
+    """
+    import hashlib
+    import fcntl
+    from pathlib import Path
+    from torch.utils.data import Subset
+
+    folders = {Path(folder).name: Path(folder) for folder, _, _ in dataset.files}
+    names = sorted(folders)
+    metadata = {name: load_json_required(str(folders[name] / 'metadata.json')) for name in names}
+    fingerprint = hashlib.sha256(json.dumps({
+        'info': load_json_required(str(Path(dataset.base_path) / 'info.json')),
+        'experiments': metadata,
+    }, sort_keys=True).encode()).hexdigest()
+    allowed = None if training_source_counts is None else sorted(set(training_source_counts))
+    path = Path(manifest_path) if manifest_path else Path(dataset.base_path) / 'experiment_split.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + '.lock', 'a') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if path.exists():
+            manifest = load_json_required(str(path))
+        else:
+            eligible = [n for n in names if allowed is None or metadata[n]['num_fires'] in allowed]
+            if len(eligible) < 3:
+                raise ValueError('At least three eligible independent experiments are required for train/val/test.')
+            rng = torch.Generator().manual_seed(int(seed))
+            shuffled = [eligible[i] for i in torch.randperm(len(eligible), generator=rng).tolist()]
+            n_train = min(len(eligible) - 2, max(1, int(0.7 * len(eligible))))
+            n_val = max(1, int(0.15 * len(eligible)))
+            train = sorted(shuffled[:n_train])
+            val = sorted(shuffled[n_train:n_train + n_val])
+            test = sorted(set(names) - set(train) - set(val))
+            lower = min(float(metadata[n]['min_temp']) for n in train)
+            upper = max(float(metadata[n]['max_temp']) for n in train)
+            if not np.isfinite([lower, upper]).all() or upper <= lower:
+                raise ValueError('Invalid training-only temperature bounds in experiment metadata.')
+            manifest = dict(schema_version=1, seed=int(seed), metadata_sha256=fingerprint,
+                            training_source_counts=allowed, train=train, validation=val, test=test,
+                            normalization=dict(min_temp=lower, max_temp=upper,
+                                               temp_range=upper-lower, fitted_on='train'))
+            temporary = path.with_name(path.name + '.tmp')
+            temporary.write_text(json.dumps(manifest, indent=2) + '\n')
+            os.replace(temporary, path)
+    if manifest.get('schema_version') != 1 or manifest['metadata_sha256'] != fingerprint:
+        raise ValueError('Split metadata changed: use the original dataset or an explicitly new split manifest.')
+    if manifest['seed'] != int(seed) or manifest.get('training_source_counts') != allowed:
+        raise ValueError('Requested split seed/source-count policy differs from the saved manifest.')
+    groups = [manifest[key] for key in ('train', 'validation', 'test')]
+    flat = [name for group in groups for name in group]
+    if any(not group for group in groups) or len(flat) != len(set(flat)) or set(flat) != set(names):
+        raise ValueError('Split must partition all selected experiments exactly once into nonempty groups.')
+    expected_min = min(float(metadata[n]['min_temp']) for n in manifest['train'])
+    expected_max = max(float(metadata[n]['max_temp']) for n in manifest['train'])
+    norm = manifest['normalization']
+    if (norm.get('fitted_on') != 'train' or norm['min_temp'] != expected_min or
+            norm['max_temp'] != expected_max or norm['temp_range'] != expected_max-expected_min):
+        raise ValueError('Manifest normalization must match the training experiments only.')
+    dataset.min_temp, dataset.max_temp, dataset.temp_range = expected_min, expected_max, expected_max-expected_min
+    dataset.data_cache.clear()
+    subsets = {}
+    for key, group in zip(('train', 'validation', 'test'), groups):
+        selected = set(group)
+        subsets[key] = Subset(dataset, [i for i, (folder, _, _) in enumerate(dataset.files)
+                                       if Path(folder).name in selected])
+    return subsets, manifest

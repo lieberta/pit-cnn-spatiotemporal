@@ -118,3 +118,39 @@ Recent fixes aligned dynamic training more closely with the simulation PDE:
 - Simulation source is defined on `:2` in z while `z=0` is also Dirichlet-clamped to ambient each step.
 - This means a source/boundary overlap exists in generated data (partially overwritten by boundary enforcement).
 - Interior-only residual reduces this mismatch during training, but it is still a data-generation consistency caveat.
+
+## Dynamic time and initial-condition handling
+
+The dynamic dataset returns an integer `step_idx`. Training and validation derive
+`tau = step_idx * dt / prediction_horizon` and
+`tau_past = (step_idx - 1) * dt / prediction_horizon`. The physics loss still
+uses the physical `dt` in seconds as its derivative denominator.
+
+For `model_past` and `soft_physics`, samples with `step_idx == 1` use the known
+initial temperature `input_t0[:, :1]` as `output_past`. Source channels are excluded.
+Later steps retain their model-based past predictions. The GT-based residuals
+already receive the stored neighboring states.
+
+This anchors the first residual step but does not constrain the model's own
+output at zero time. Every epoch, all modes (including MSE-only and physics-only)
+therefore evaluate the unmodified model at `tau=0` during validation. The run's
+`initial_condition_metrics.csv` records:
+
+- `val_ic_mse`: squared temperature error averaged over all validation-sample voxels.
+- `val_ic_max_abs_error`: largest absolute temperature error across those voxels.
+
+Both are in normalized temperature units (squared for MSE). Initial fields can
+occur repeatedly because the validation split contains experiment/time pairs.
+These are evaluation-mode diagnostics without gradients or an extra IC loss.
+The separate CSV also supports resuming older runs without changing their
+existing metrics-column layout. Each validation batch requires one additional
+forward pass for this diagnostic.
+
+### Reproduzierbare Experimentvergleiche
+
+Neue dynamische Läufe verwenden vollständige, feste Train-/Validation-/Test-
+Experimente und eine ausschließlich auf Trainingsdaten bestimmte Normierung.
+Das [Experimentprotokoll](docs/experiment_protocol.md) beschreibt Residualdiagnostik,
+Checkpointauswahl, MSE-Fortsetzungskontrolle und die separate Testauswertung in
+physikalischen Einheiten. Historische Checkpoints benötigen eine neue Baseline,
+bevor sie unter diesem Protokoll wissenschaftlich vergleichbar sind.

@@ -1,0 +1,30 @@
+from configs.reproducibility import seed, split_seed, split_manifest_path, training_source_counts
+
+import torch
+
+# Training config for the dynamic PITCNN model.
+# This run disables the physics term completely and trains with pure MSE.
+# physics_residual_mode is still set explicitly because the dynamic training
+# entrypoint requires it, but it is irrelevant when lp_weight = 0.0.
+
+train_dtype = torch.float32
+epochs = 20
+lr = 0.001
+loss_weight_schedule = [
+    {"epochs": 20, "lp_weight": 0.0, "mse_weight": 1.0},
+]
+physics_residual_mode = "model_past"
+model_class_name = "PITCNN_dynamic"
+model_name = model_class_name + "_STEEL_MEDIUM_MSE20_PROTOCOL"
+
+data_path = "./data/steel_train_medium/"
+data_modulo = 1
+data_max_experiments = None
+data_experiment_offset = 0
+
+run_comment = (
+    "New 20-epoch MSE baseline with independent experiment holdouts."
+)
+
+resume_run_ids_dynamic = []
+auto_collect_dynamic = False
