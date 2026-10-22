@@ -205,6 +205,7 @@ def dynamic(
     split_manifest_path=None,
     split_seed=42,
     training_source_counts=None,
+    config_source=None,
 ):
 
     # a function that takes all important parameter as input, creates and trains the model
@@ -334,6 +335,14 @@ def dynamic(
     run_config["physics_residual_mode"] = physics_residual_mode
     write_run_config(model_dir, run_config)
 
+    if config_source is not None:
+        import hashlib
+        source_bytes = Path(config_source).read_bytes()
+        Path(model_dir, 'training_config.py').write_bytes(source_bytes)
+        run_config['training_config_sha256'] = hashlib.sha256(source_bytes).hexdigest()
+        run_config['training_config_source'] = str(Path(config_source).resolve())
+        write_run_config(model_dir, run_config)
+
     seed_everything(seed)
     model = model_class(c=channels).to(device=device, dtype=train_dtype)
     print(f'Train Model:')
@@ -391,7 +400,8 @@ if __name__ == '__main__':
     if model_class_name != "PICNN_static":
         split_options = dict(split_manifest_path=cfg.split_manifest_path,
                              split_seed=int(cfg.split_seed),
-                             training_source_counts=cfg.training_source_counts)
+                             training_source_counts=cfg.training_source_counts,
+                             config_source=args.config)
 
     # Validate model_class_name and determine mode
     if model_class_name not in MODEL_CLASS_REGISTRY:
@@ -410,9 +420,9 @@ if __name__ == '__main__':
     )
 
     # Shared training parameters
-    channels = 16
+    channels = int(getattr(cfg, "channels", 16))
     lr = cfg.lr
-    batch = 32 * 4
+    batch = int(getattr(cfg, "batch", 32 * 4))
 
     # Static parameters
     predicted_times = [0.5, 3, 10]

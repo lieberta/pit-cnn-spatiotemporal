@@ -38,3 +38,22 @@ Trainerdurchläufe; daraus folgt keine abgeschlossene experimentelle Evaluation.
 
 Die drei neuen Protokoll-Konfigurationen werden ausdrücklich versioniert,
 obwohl die bestehende `.gitignore` neue Dateien unter `configs/` ausschließt.
+
+## Ergänzung nach der zweiten Aufgabenliste
+
+Vor dem nächsten Push ergänzt: gemeinsamer Trainings-PDE-Fehler unabhängig vom
+Gewicht, explizite Lossmessung bei Gewicht null, Loss-/Gradientenskalen,
+Python-/NumPy-RNG-Fortsetzung, Konfigurationskopie mit Hash, neue Baselinepflicht
+für Physics-Warmstarts und eine ausführbare A–E-Kampagne mit drei Seeds.
+Die Kalibrierung verwendet nur Trainingsdaten und ein gemeinsames Gewicht für
+alle E-Seeds. Der Evaluator prüft gepaarte Anfangsgewichte und doppelte Seeds
+und liefert eine zusätzliche Streuung über Seedmittelwerte.
+
+Die neuen Prüfungen umfassen auch falsche Geometrie und Diffusivität sowie
+ungewichtete Lossmessung und unveränderte Gradienten beim Skalenmessen.
+Gemäß Nutzeranweisung werden die minimalen Tests dieses Ergänzungsstands erst
+nach dem Push ausgeführt. Der frühere Testbefund oben gilt für den vorherigen
+Commit. Die mehrtägige Trainingskampagne und die historische Paper-Reproduktion
+sind damit vorbereitet beziehungsweise weiterhin gesondert durchzuführen;
+es werden keine neuen Trainingsergebnisse behauptet. Die harte Anfangsbedingung
+aus der ersten Liste bleibt offen; die ergänzte Liste beginnt mit Punkt 4.

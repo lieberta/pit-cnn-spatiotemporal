@@ -123,6 +123,8 @@ def main():
     args = parser.parse_args()
     all_records, all_times, provenance = [], [], []
     reference_split = None
+    initializations = {}
+    seen_variant_seeds = set()
     for run in args.runs:
         cfg = json.loads((run / 'config.json').read_text())
         protocol = json.loads((run / 'protocol.json').read_text())
@@ -173,6 +175,15 @@ def main():
                                   batch=cfg['batch'], channels=cfg['channels'],
                                   dtype=cfg['training_dtype']), sort_keys=True)
         identity = dict(run_id=cfg['run_id'], seed=cfg['seed'], variant=variant)
+        pair = (variant, cfg['seed'])
+        if pair in seen_variant_seeds:
+            raise ValueError('Duplicate variant/seed runs would double-count a repetition.')
+        seen_variant_seeds.add(pair)
+        initialization_key = (cfg['model_class'], cfg['channels'], cfg['training_dtype'], cfg['seed'])
+        initial_hash = cfg['initial_state_sha256']
+        if initialization_key in initializations and initializations[initialization_key] != initial_hash:
+            raise ValueError('Paired runs with the same seed must have identical initial weights.')
+        initializations[initialization_key] = initial_hash
         all_records.extend(dict(**identity, **r) for r in records)
         all_times.extend(dict(**identity, **r) for r in times)
         provenance.append(dict(run=str(run), checkpoint='best.pth', checkpoint_epoch=checkpoint['epoch']+1,
@@ -181,7 +192,12 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     write_csv(out/'experiments.csv', all_records)
     write_csv(out/'times.csv', all_times)
-    write_csv(out/'seed_summary.csv', summarize(all_records, ('variant', 'run_id', 'seed')))
+    seed_summary = summarize(all_records, ('variant', 'run_id', 'seed'))
+    write_csv(out/'seed_summary.csv', seed_summary)
+    # Give each seed one observation after averaging its independent experiments.
+    seed_means = [dict(variant=r['variant'], seed=r['seed'],
+                       **{metric: r[metric+'_mean'] for metric in METRICS}) for r in seed_summary]
+    write_csv(out/'across_seed_summary.csv', summarize(seed_means, ('variant',)))
     write_csv(out/'source_count_summary.csv', summarize(all_records, ('variant', 'run_id', 'source_count')))
     write_csv(out/'time_summary.csv', summarize(all_times, ('variant', 'run_id', 'time_seconds'),
                                                ('mae_c','rmse_c','pde_rmse_k_per_s')))

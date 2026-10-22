@@ -1,5 +1,6 @@
 from configs.reproducibility import seed, split_seed, split_manifest_path, training_source_counts
 
+import os
 import torch
 
 # Follow-up training config for the dynamic PITCNN model.
@@ -27,7 +28,7 @@ run_comment = (
 )
 
 resume_run_ids_dynamic = []
-initialize_run_ids_dynamic = ["dynamic_20260323-104107_7e2ea6"]
+initialize_run_ids_dynamic = [os.environ["MSE20_PROTOCOL_RUN_ID"]]
 auto_collect_dynamic = False
 
 # command:

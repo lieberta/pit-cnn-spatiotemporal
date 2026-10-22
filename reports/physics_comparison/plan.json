@@ -1,0 +1,221 @@
+[
+  {
+    "kind": "calibration",
+    "seed": 42,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "-m",
+      "evaluation.calibrate_physics",
+      "--seed",
+      "42",
+      "--output",
+      "reports/physics_comparison/scales_seed42.json"
+    ]
+  },
+  {
+    "kind": "calibration",
+    "seed": 43,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "-m",
+      "evaluation.calibrate_physics",
+      "--seed",
+      "43",
+      "--output",
+      "reports/physics_comparison/scales_seed43.json"
+    ]
+  },
+  {
+    "kind": "calibration",
+    "seed": 44,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "-m",
+      "evaluation.calibrate_physics",
+      "--seed",
+      "44",
+      "--output",
+      "reports/physics_comparison/scales_seed44.json"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 42,
+    "variant": "A",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 42,
+    "variant": "B",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 42,
+    "variant": "C",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 42,
+    "variant": "D",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 42,
+    "variant": "E",
+    "soft_weight_from": "median across all seed calibration reports",
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 43,
+    "variant": "A",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 43,
+    "variant": "B",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 43,
+    "variant": "C",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 43,
+    "variant": "D",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 43,
+    "variant": "E",
+    "soft_weight_from": "median across all seed calibration reports",
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 44,
+    "variant": "A",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 44,
+    "variant": "B",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 44,
+    "variant": "C",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 44,
+    "variant": "D",
+    "soft_weight_from": null,
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  },
+  {
+    "kind": "training",
+    "seed": 44,
+    "variant": "E",
+    "soft_weight_from": "median across all seed calibration reports",
+    "command": [
+      "/beegfs/home/l/lieberta/venv/penn-venv/bin/python",
+      "main.py",
+      "--config",
+      "configs/pitcnn_steel_comparison.py"
+    ]
+  }
+]

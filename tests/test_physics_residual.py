@@ -34,6 +34,14 @@ class StoredSimulationResidualTests(unittest.TestCase):
             now,past=temperature(n),temperature(n-1)
             r=physics_residual(now,past,info['dt'],info['alpha'],lap,source)
             self.assertLess(r.square().mean().item(),1e-24)
+        self.assertGreater(physics_residual(now,past,info['dt'],info['alpha']*2,lap,source).square().mean().item(),1e-12)
+        try:
+            torch.set_default_dtype(torch.float64)
+            wrong_lap = Laplacian3DLayer(info['dx']*2, info['dy']*2, info['dz']*2,
+                                        (info['ambient_temp']-info['min_temp'])/scale)
+        finally:
+            torch.set_default_dtype(previous_dtype)
+        self.assertGreater(physics_residual(now,past,info['dt'],info['alpha'],wrong_lap,source).square().mean().item(),1e-12)
         self.assertGreater(physics_residual(now,past,info['dt']*2,info['alpha'],lap,source).square().mean().item(),1e-12)
         self.assertGreater(physics_residual(now,past,info['dt'],info['alpha'],lap,torch.zeros_like(source)).square().mean().item(),1e-8)
 

@@ -279,19 +279,22 @@ class CombinedLoss_dynamic(nn.Module):
         target_future,
         source_mask,
         source_field,
+        measure_physics=False,
     ):
         """
         Compute the total, MSE, and physics loss components.
 
         input_t0 contains the dynamic model input at t0. In soft_physics mode,
         only the normalized initial temperature field U0 (channel 0) is used in
-        the Laplacian term.
+        the Laplacian term. Set measure_physics=True to measure the objective
+        physics term even when its optimization weight is zero. Evaluation of
+        the common model residual remains independent of the chosen objective.
         """
 
         # Always measure data fidelity, including physics-only training.
         mse = self.mse_loss(output, target)
 
-        if self.lp_weight == 0.0:
+        if self.lp_weight == 0.0 and not measure_physics:
             physics = torch.zeros((), dtype=output.dtype, device=output.device)
         else:
             inner = (slice(None), slice(None), slice(1, -1), slice(1, -1), slice(1, -1))

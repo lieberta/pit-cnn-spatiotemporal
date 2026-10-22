@@ -50,8 +50,9 @@ Diagnostik sind beide Zustände Modellvorhersagen, abgesehen vom bekannten erste
 Anfangszustand. Die gewählte Trainingsvariante (model_past, gt_past, gt_future,
 soft_physics) bestimmt weiterhin den optimierten Loss.
 
-`val_physics_loss` bezeichnet jetzt den gemeinsamen ungewichteten Residual-MSE.
-`val_objective_physics_loss` enthält den tatsächlich verwendeten Physikterm;
+`train_physics_loss` und `val_physics_loss` bezeichnen den gemeinsamen
+ungewichteten Residual-MSE, auch für MSE-only.
+`train_objective_physics_loss` und `val_objective_physics_loss` enthalten den tatsächlich verwendeten Physikterm;
 bei deaktiviertem Physiktraining ist dieser leer. Deshalb lässt sich insbesondere
 bei Target-Varianten `val_total_loss` nicht aus `val_physics_loss` rekonstruieren.
 Der Daten-MSE wird auch bei MSE-Gewicht null gemessen. Batchmittelwerte werden
@@ -69,7 +70,7 @@ Batchreihenfolge. Hardware-/Versionswechsel sind damit nicht automatisch bitglei
 
 Jeder Run speichert `initial_state.pth`, dessen Hash, Git-Commit/Dirty-Status und
 Diff-Hash, Metadatenhash, Normierung, Einheiten, Split und effektiven Lossplan.
-Checkpoints enthalten Optimizer, Torch-Zufallszustand, Seed und Protokoll.
+Checkpoints enthalten Optimizer, Python-/NumPy-/Torch-Zufallszustände, Seed und Protokoll.
 `best.pth` wird ausschließlich nach dem kleinsten Validation-MSE ausgewählt.
 Die Testmenge wird im Training nicht ausgewertet.
 
@@ -84,8 +85,9 @@ herstellen. Historische Berichte dokumentieren weiterhin den damaligen Stand.
    `configs/pitcnn_timefirst_steel_medium_from_mse20_to_mse_10ep.py` in einem neuen
    Run auf 30 Epochen verlängern.
 3. Für die Physics-Fortsetzungen ebenfalls diese neue Baseline als
-   `initialize_run_ids_dynamic` verwenden (historische IDs in vorhandenen
-   Konfigurationen ersetzen), gleiche Seeds und einen 20+10-Epochenplan wählen.
+   `initialize_run_ids_dynamic` verwenden. Die gt_past-/gt_future-Fortsetzungen
+   lesen ebenfalls `MSE20_PROTOCOL_RUN_ID`; historische IDs sind dort entfernt.
+   Gleiche Seeds und einen 20+10-Epochenplan wählen.
    Verzweigt wird vom letzten 20-Epochen-Checkpoint, nicht von einem früheren Best.
 4. Für mehrere Seeds jeweils eine eigene Baseline und gepaarte Fortsetzungen
    erzeugen; die Splitlisten bleiben unverändert.
@@ -111,6 +113,9 @@ ohne doppelt gezählte Ecken. Zeitpunkte und Quellzahlen erhalten eigene Tabelle
 `source_count_summary.csv` und `time_summary.csv` enthalten Gruppenwerte.
 `experiment_across_seeds.csv` mittelt zuerst Seeds desselben Experiments;
 `variant_summary.csv` mittelt anschließend diese unabhängigen Experimente.
+`across_seed_summary.csv` enthält Mittelwert und Streuung der pro Seed über
+Testexperimente gemittelten Fehler. Doppelte Variante/Seed-Kombinationen werden
+abgewiesen; gepaarte Runs benötigen denselben Hash der Anfangsgewichte.
 Die Streuungen sind deskriptive Standardabweichungen, keine Konfidenzintervalle.
 Ein Scatterplot stellt Temperatur-RMSE dem PDE-RMSE gegenüber. `provenance.json`
 zeichnet Checkpoint und verwendete Fälle auf.
@@ -126,3 +131,55 @@ Ein zusätzlicher Test verwendet echte gespeicherte Float64-Stahlsimulationen:
 Der konsistente Euler-Residual muss numerisch null sein; falsches Δt und ein
 fehlender Quellterm werden erkannt. Ohne lokale Simulationsdaten wird nur dieser
 Datencheck übersprungen. Die vorliegenden Änderungen starten keine neuen Trainings.
+
+## Kontrollierter Vergleich A–E
+
+    python scripts/physics_comparison.py
+
+Dies schreibt ausschließlich einen Plan für Seeds 42, 43 und 44. Mit
+`--execute` werden zunächst der echte Stahl-Residualtest und die Kalibrierungen,
+danach die 15 Trainings nacheinander ausgeführt. Auf einem GPU-Rechenknoten
+ausführen; die gesamte Kampagne ist kein kurzer Funktionstest.
+
+Alle Varianten verwenden `configs/pitcnn_steel_comparison.py`, dieselben
+versionierten Splits, Modellklasse PITCNN_dynamic, 16 Kanäle, Batchgröße 128,
+Lernrate 0.001 und 30 Epochen ab identischen Anfangsgewichten je Seed:
+
+| Variante | Regularisierung | Gewicht |
+|---|---|---:|
+| A | MSE-only | 0 |
+| B | vollständiges model_past | 0.001 |
+| C | vollständiges model_past | 0.01 |
+| D | vollständiges model_past | 0.1 |
+| E | soft_physics / diffusion-inspired | aus Trainingsgradienten |
+
+`evaluation.calibrate_physics` misst auf dem ersten geshuffelten Trainingsbatch
+(Standard 4 Samples) die ungewichteten Losses und Gradienten-L2-Normen beider
+Regularisierungen. Es führt keine Optimizer-Schritte aus und liest keine
+Validation-/Testtargets. Pro Seed wird als Kandidat für E das Gewicht gewählt,
+das an der Initialisierung ein Verhältnis von 0.1 zwischen gewichtetem
+Physikgradienten und Datengradienten ergibt. Der Median dieser drei Kandidaten
+wird für alle Seeds verwendet; Wahl und Einzelmessungen werden gespeichert.
+Diese lokale Skalenkalibrierung ist keine Hyperparameteroptimierung und keine
+Aussage über spätere Trainingsgradienten.
+
+Der Trainer speichert zusätzlich `loss_gradient_scales.csv`: erster
+Trainingsbatch jeder Epoche, Datenloss, tatsächlich gewählter Physikterm,
+Gradientennormen, Verhältnisse und Gewichte. Das Messen überschreibt keine
+Parametergradienten. `measure_physics=True` aktiviert in
+`CombinedLoss_dynamic.compute_components` die Messung bei Gewicht null.
+Der gemeinsame Modell-PDE-Residual bleibt für alle Varianten identisch.
+
+`PITCNN_SEED` setzt den Modellseed; der Splitseed bleibt 42. Der Run speichert
+neben der effektiven JSON-Konfiguration eine Kopie der aufgerufenen Python-
+Konfiguration und deren SHA-256. Protokollversion 2 verhindert eine Fortsetzung
+mit inkompatiblem CSV-/Diagnostikstand aus Version 1.
+
+`across_seed_summary.csv` und die Initialisierungskontrolle sind für den
+Vergleich frischer Läufe gedacht; Warmstarts mit unterschiedlichen Ausgangs-
+checkpoints müssen separat ausgewertet werden.
+
+gt_past bleibt Implementierungskontrolle, gt_future eine zusätzliche
+supervidierte Kontrolle; beide gehören nicht zum A–E-Vergleich. Historische
+Paper-Reproduktion erfordert separat eingefrorene Gewichte, Daten und Code;
+sie wird durch die neue Kampagne nicht ersetzt.

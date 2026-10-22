@@ -28,6 +28,14 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
             torch.set_rng_state(checkpoint["torch_rng_state"].cpu())
         if checkpoint.get("cuda_rng_state") is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all([state.cpu() for state in checkpoint["cuda_rng_state"]])
+        if "python_rng_state" in checkpoint:
+            import random
+            random.setstate(checkpoint["python_rng_state"])
+        if "numpy_rng_state" in checkpoint:
+            import numpy as np
+            state = checkpoint["numpy_rng_state"]
+            np.random.set_state((state[0], np.asarray(state[1], dtype=np.uint32),
+                                 state[2], state[3], state[4]))
         start_epoch = checkpoint.get("epoch", -1) + 1
         return start_epoch
     model.load_state_dict(checkpoint)
@@ -169,3 +177,22 @@ def state_dict_hash(state_dict):
 
 def model_state_hash(model):
     return state_dict_hash(model.state_dict())
+
+
+def loss_gradient_scales(model, data_loss, physics_loss, physics_weight):
+    """Measure unweighted gradient norms without changing .grad or model state."""
+    parameters = [p for p in model.parameters() if p.requires_grad]
+    def norm(loss):
+        if not loss.requires_grad:
+            return 0.0
+        gradients = torch.autograd.grad(loss, parameters, retain_graph=True, allow_unused=True)
+        return sum(g.detach().double().square().sum().item()
+                   for g in gradients if g is not None) ** 0.5
+    data_norm, physics_norm = norm(data_loss), norm(physics_loss)
+    data_value, physics_value = data_loss.detach().item(), physics_loss.detach().item()
+    return dict(data_loss=data_value, objective_physics_loss=physics_value,
+                data_gradient_norm=data_norm, objective_physics_gradient_norm=physics_norm,
+                physics_to_data_loss=physics_value / data_value if data_value > 0 else None,
+                physics_to_data_gradient=physics_norm / data_norm if data_norm > 0 else None,
+                weighted_physics_to_data_gradient=(physics_weight * physics_norm / data_norm
+                                                  if data_norm > 0 else None))

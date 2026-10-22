@@ -1,5 +1,7 @@
 """Shared comparison settings; override explicitly in individual run configs."""
-seed = 42
+import os
+
+seed = int(os.environ.get("PITCNN_SEED", "42"))
 split_seed = 42
 # None uses <dataset>/experiment_split.json; reuse this file across model seeds.
 split_manifest_path = None

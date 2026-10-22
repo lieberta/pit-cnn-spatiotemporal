@@ -2,6 +2,9 @@ import math
 import os
 import time
 import json
+import random
+
+import numpy as np
 
 import matplotlib.pyplot as plt
 import torch
@@ -11,7 +14,7 @@ from tqdm import tqdm
 
 from .loss import CombinedLoss_dynamic, physics_residual
 from data import prepare_experiment_split
-from .train_utils import seed_everything, seed_worker, git_provenance, state_dict_hash, append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
+from .train_utils import loss_gradient_scales, seed_everything, seed_worker, git_provenance, state_dict_hash, append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
 
 def _normalized_model_times(step_idx, dt, prediction_horizon, dtype):
     """Convert integer steps to normalized model times, keeping dt in seconds."""
@@ -70,7 +73,7 @@ class BaseModel_dynamic(nn.Module):
             dataset, split_manifest_path, split_seed, training_source_counts
         )
         protocol = {
-            "version": 1, "split": manifest,
+            "version": 2, "split": manifest,
             "time_units": {"model": "t_seconds / prediction_horizon", "derivative_dt": "seconds"},
             "first_step": "known_temperature_channel_0", "checkpoint_selection": "validation_mse",
             "diagnostic_residual": "model_past_explicit_euler_interior",
@@ -218,6 +221,7 @@ class BaseModel_dynamic(nn.Module):
             train_loss = 0.0
             train_mse = 0.0
             train_physics = 0.0
+            train_objective_physics = 0.0
             val_loss = 0.0
             val_mse = 0.0
             val_physics = 0.0
@@ -249,14 +253,17 @@ class BaseModel_dynamic(nn.Module):
 
                 output = self(input_t0, tau)
 
-                # The model_past and soft_physics residuals require a second
-                # model prediction at the previous discrete step. Model inputs
-                # are normalized times; the loss denominator remains physical dt.
+                # Measure the same model-based residual for every variant.
+                # Only model-based objectives need gradients through the past.
                 if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
-                    output_past = self(input_t0, tau_past)
-                    output_past = _anchor_initial_state(input_t0, output_past, step_idx)
+                    diagnostic_past = self(input_t0, tau_past)
                 else:
-                    output_past = None
+                    with torch.no_grad():
+                        diagnostic_past = self(input_t0, tau_past)
+                diagnostic_past = _anchor_initial_state(input_t0, diagnostic_past, step_idx)
+                output_past = diagnostic_past if criterion.physics_residual_mode in {
+                    "model_past", "soft_physics"
+                } else None
 
                 loss, mse_loss, physics_loss = criterion.compute_components(
                     input_t0=input_t0,
@@ -269,6 +276,24 @@ class BaseModel_dynamic(nn.Module):
                     source_field=source_field,
                 )
 
+                common_residual = physics_residual(
+                    output, diagnostic_past, dt, alpha, criterion.laplacian_layer, source_field
+                )
+                if i == 0:
+                    # Probe the selected regularizer even for the MSE control.
+                    _, _, measured_objective = criterion.compute_components(
+                        input_t0=input_t0, output=output, output_past=output_past,
+                        target_past=target_past, target=target, target_future=target_future,
+                        source_mask=source_mask, source_field=source_field, measure_physics=True
+                    )
+                    scales = loss_gradient_scales(self, mse_loss, measured_objective, criterion.lp_weight)
+                    scales.update(common_physics_loss=common_residual.detach().square().mean().item())
+                    scale_row = dict(run_id=run_id or model_name, epoch=epoch + 1,
+                                     samples=target.shape[0], lp_weight=criterion.lp_weight,
+                                     mse_weight=criterion.mse_weight, **scales)
+                    append_metrics_row(os.path.join(model_dir, "loss_gradient_scales.csv"),
+                                       list(scale_row), scale_row)
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -276,7 +301,8 @@ class BaseModel_dynamic(nn.Module):
                 train_samples += batch_samples
                 train_loss += loss.item() * batch_samples
                 train_mse += mse_loss.item() * batch_samples
-                train_physics += physics_loss.item() * batch_samples
+                train_physics += common_residual.detach().square().mean().item() * batch_samples
+                train_objective_physics += physics_loss.item() * batch_samples
 
                 loop.set_description(f"Epoch [{epoch}/{num_epochs}]")
                 loop.set_postfix(trainloss=train_loss / train_samples)
@@ -357,6 +383,7 @@ class BaseModel_dynamic(nn.Module):
                 "mse_weight",
                 "physics_residual_mode",
                 "val_objective_physics_loss",
+                "train_objective_physics_loss",
             ]
             row = {
                 "run_id": run_id or model_name,
@@ -374,13 +401,14 @@ class BaseModel_dynamic(nn.Module):
                 "run_id": run_id or model_name,
                 "epoch": epoch + 1,
                 "train_mse_loss": avg_train_mse,
-                "train_physics_loss": avg_train_physics if criterion.lp_weight != 0 else None,
+                "train_physics_loss": avg_train_physics,
                 "val_mse_loss": avg_val_mse,
                 "val_physics_loss": avg_val_physics,
                 "lp_weight": float(criterion.lp_weight),
                 "mse_weight": float(criterion.mse_weight),
                 "physics_residual_mode": criterion.physics_residual_mode,
                 "val_objective_physics_loss": val_objective_physics / val_samples if criterion.lp_weight != 0 else None,
+                "train_objective_physics_loss": train_objective_physics / train_samples if criterion.lp_weight != 0 else None,
             }
             append_metrics_row(metrics_path, header, row)
             append_metrics_row(components_path, components_header, components_row)
@@ -445,6 +473,8 @@ class BaseModel_dynamic(nn.Module):
             "validation_mse": validation_mse,
             "protocol": self.experiment_protocol,
             "seed": self.experiment_seed,
+            "python_rng_state": random.getstate(),
+            "numpy_rng_state": (lambda state: (state[0], state[1].tolist(), *state[2:]))(np.random.get_state()),
             "torch_rng_state": torch.get_rng_state(),
             "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         }
