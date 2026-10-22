@@ -1,0 +1,28 @@
+{
+  "commit": "ec48b21",
+  "launcher": "slurm/physics_comparison.slurm",
+  "calibration_job": 1459640,
+  "partition": "small_gpu",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "variants": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+  ],
+  "max_parallel_trainings": 3,
+  "dependency": "afterok:1459640",
+  "local_launcher_uncommitted": false,
+  "training_array_job": 1459642,
+  "failed_initial_jobs": [
+    1459598,
+    1459600,
+    1459604,
+    1459606
+  ]
+}

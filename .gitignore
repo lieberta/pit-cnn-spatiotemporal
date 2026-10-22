@@ -11,3 +11,6 @@ terminal_output_main.log
 configs/
 slurm-*.out
 agent_docs/
+# Runtime locks and generated comparison calibration outputs.
+splits/*.lock
+reports/physics_comparison/campaign_*/

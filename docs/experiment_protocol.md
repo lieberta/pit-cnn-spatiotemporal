@@ -183,3 +183,20 @@ gt_past bleibt Implementierungskontrolle, gt_future eine zusätzliche
 supervidierte Kontrolle; beide gehören nicht zum A–E-Vergleich. Historische
 Paper-Reproduktion erfordert separat eingefrorene Gewichte, Daten und Code;
 sie wird durch die neue Kampagne nicht ersetzt.
+
+## Slurm-Start
+
+`slurm/physics_comparison.slurm OUTPUT calibration` führt den Residualcheck und
+alle drei Kalibrierungen auf einer GPU aus. Danach lässt sich dieselbe Datei
+mit `OUTPUT training`, `--array=0-14%3` und `--dependency=afterok:KALIBRIERUNGSJOB`
+starten. Die Array-Indizes bilden zuerst die Varianten A–E für Seed 42, dann
+43 und 44 ab. Jeder Lauf bekommt seine eigene Zeitgrenze von 23:59 Stunden.
+Die Python-Umgebung bringt ihre CUDA-Laufzeit mit; ein separates altes CUDA-
+Modul wird nicht geladen.
+
+PyTorch 2.0.1 unterstützt natives Reflection-Padding auf CUDA im Rückwärtslauf
+nicht deterministisch. `ReflectionConv3d` behält Parameter, Zustandsnamen und
+Vorwärtswerte unverändert, summiert im Rückwärtslauf jedoch die reflektierten
+Randbeiträge durch geordnete Slice-Additionen. Der Test vergleicht Werte und
+Gradienten mit dem nativen CPU-Padding, einschließlich asymmetrischer Ränder.
+Nach dieser Startkorrektur bestanden alle 13 lokalen Tests.

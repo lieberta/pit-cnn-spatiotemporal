@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from training.deterministic_padding import ReflectionConv3d
+
 from training.train_pitcnn_dynamic import BaseModel_dynamic
 
 
@@ -13,46 +15,46 @@ class PITCNN_dynamic(BaseModel_dynamic):
         # The dynamic model now receives two aligned spatial input channels:
         # - channel 0: initial temperature field T0
         # - channel 1: explicit source field
-        self.conv11 = nn.Conv3d(2, c, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv11 = ReflectionConv3d(2, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn11 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
-        self.conv12 = nn.Conv3d(c, c, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv12 = ReflectionConv3d(c, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn12 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
         self.avgpool = nn.AvgPool3d(kernel_size=2, stride=2)
 
-        self.conv21 = nn.Conv3d(c, c * 2, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv21 = ReflectionConv3d(c, c * 2, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn21 = nn.GroupNorm(num_groups=int(c * 2 / 8), num_channels=c * 2)
-        self.conv22 = nn.Conv3d(c * 2, c * 2, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv22 = ReflectionConv3d(c * 2, c * 2, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn22 = nn.GroupNorm(num_groups=int(c * 2 / 8), num_channels=c * 2)
 
-        self.conv31 = nn.Conv3d(c * 2, c * 4, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv31 = ReflectionConv3d(c * 2, c * 4, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn31 = nn.GroupNorm(num_groups=int(c * 4 / 8), num_channels=c * 4)
-        self.conv32 = nn.Conv3d(c * 4, c * 4, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv32 = ReflectionConv3d(c * 4, c * 4, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn32 = nn.GroupNorm(num_groups=int(c * 4 / 8), num_channels=c * 4)
 
-        self.conv_m1 = nn.Conv3d(c * 8, c * 8, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv_m1 = ReflectionConv3d(c * 8, c * 8, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn_m1 = nn.GroupNorm(num_groups=int(c), num_channels=c * 8)
-        self.conv_m2 = nn.Conv3d(c * 8, c * 8, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv_m2 = ReflectionConv3d(c * 8, c * 8, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn_m2 = nn.GroupNorm(num_groups=int(c), num_channels=c * 8)
 
         self.up1 = nn.ConvTranspose3d(c * 8, c * 8, kernel_size=2, stride=2, output_padding=0)
-        self.conv41 = nn.Conv3d(c * 8 + c * 4, c * 4, kernel_size=3, padding=1)
+        self.conv41 = ReflectionConv3d(c * 8 + c * 4, c * 4, kernel_size=3, padding=1)
         self.gn41 = nn.GroupNorm(num_groups=int(c * 4 / 8), num_channels=c * 4)
-        self.conv42 = nn.Conv3d(c * 4, c * 4, kernel_size=3, padding=1)
+        self.conv42 = ReflectionConv3d(c * 4, c * 4, kernel_size=3, padding=1)
         self.gn42 = nn.GroupNorm(num_groups=int(c * 4 / 8), num_channels=c * 4)
 
         self.up2 = nn.ConvTranspose3d(c * 4, c * 4, kernel_size=2, stride=2, output_padding=0)
-        self.conv51 = nn.Conv3d(c * 4 + c * 2, c * 2, kernel_size=3, padding=1)
+        self.conv51 = ReflectionConv3d(c * 4 + c * 2, c * 2, kernel_size=3, padding=1)
         self.gn51 = nn.GroupNorm(num_groups=int(c * 2 / 8), num_channels=c * 2)
-        self.conv52 = nn.Conv3d(c * 2, c * 2, kernel_size=3, padding=1)
+        self.conv52 = ReflectionConv3d(c * 2, c * 2, kernel_size=3, padding=1)
         self.gn52 = nn.GroupNorm(num_groups=int(c * 2 / 8), num_channels=c * 2)
 
         self.up3 = nn.ConvTranspose3d(c * 2, c * 2, kernel_size=2, stride=2, output_padding=0)
-        self.conv61 = nn.Conv3d(c * 2 + c, c, kernel_size=3, padding=1)
+        self.conv61 = ReflectionConv3d(c * 2 + c, c, kernel_size=3, padding=1)
         self.gn61 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
-        self.conv62 = nn.Conv3d(c, c, kernel_size=3, padding=1)
+        self.conv62 = ReflectionConv3d(c, c, kernel_size=3, padding=1)
         self.gn62 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
 
-        self.conv_end = nn.Conv3d(c, 1, kernel_size=1, padding=0, padding_mode="reflect")
+        self.conv_end = ReflectionConv3d(c, 1, kernel_size=1, padding=0, padding_mode="reflect")
 
     def forward(self, x_input, time):
         # x_input shape: (B, 2, Nx, Ny, Nz)
@@ -111,7 +113,7 @@ class PITCNN_dynamic_latenttime1(PITCNN_dynamic):
     def __init__(self, c=8):
         super().__init__(c=c)
         # This variant appends only one additional scalar time channel in the bottleneck.
-        self.conv_m1 = nn.Conv3d(self.c * 4 + 1, self.c * 8, kernel_size=3, padding=1, padding_mode="reflect")
+        self.conv_m1 = ReflectionConv3d(self.c * 4 + 1, self.c * 8, kernel_size=3, padding=1, padding_mode="reflect")
 
     def forward(self, x_input, time):
         x = x_input
