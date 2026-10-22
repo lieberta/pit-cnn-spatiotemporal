@@ -61,7 +61,7 @@ class InitialConditionTests(unittest.TestCase):
                 return 0.0
 
         def local_loader(*args, **kwargs):
-            kwargs.update(num_workers=0, pin_memory=False)
+            kwargs.update(num_workers=0, pin_memory=False, persistent_workers=False)
             return DataLoader(*args, **kwargs)
 
         def fake_split(dataset, *args):

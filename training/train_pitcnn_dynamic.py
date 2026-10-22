@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from .loss import CombinedLoss_dynamic, physics_residual
 from data import prepare_experiment_split
-from .train_utils import loss_gradient_scales, seed_everything, seed_worker, git_provenance, state_dict_hash, append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
+from .train_utils import atomic_torch_save, EpochBatchSampler, TrainingBudget, loss_gradient_scales, seed_everything, seed_worker, git_provenance, state_dict_hash, append_metrics_row, fallback_loss_history, load_checkpoint, load_loss_history_from_metrics, accumulate_training_duration, update_run_config
 
 def _normalized_model_times(step_idx, dt, prediction_horizon, dtype):
     """Convert integer steps to normalized model times, keeping dt in seconds."""
@@ -51,6 +51,9 @@ class BaseModel_dynamic(nn.Module):
         split_manifest_path=None,
         split_seed=42,
         training_source_counts=None,
+        loader_workers=4,
+        mmap_cache_dir=None,
+        max_runtime_seconds=None,
     ):
         tic = time.perf_counter()
 
@@ -96,14 +99,15 @@ class BaseModel_dynamic(nn.Module):
         self.experiment_seed = seed
         train_generator = torch.Generator()
         val_generator = torch.Generator().manual_seed(seed)
-        train_loader = DataLoader(
-            subsets['train'], shuffle=True, batch_size=batch_size, num_workers=16,
-            pin_memory=True, generator=train_generator, worker_init_fn=seed_worker,
-        )
-        val_loader = DataLoader(
-            subsets['validation'], shuffle=False, batch_size=batch_size, num_workers=16,
-            pin_memory=True, generator=val_generator, worker_init_fn=seed_worker,
-        )
+        if mmap_cache_dir:
+            dataset.prepare_mmap_cache(mmap_cache_dir, set(manifest['train'] + manifest['validation']))
+        batch_sampler = EpochBatchSampler(len(subsets['train']), batch_size, seed)
+        loader_options = dict(num_workers=loader_workers, pin_memory=True,
+                              worker_init_fn=seed_worker, persistent_workers=loader_workers > 0)
+        train_loader = DataLoader(subsets['train'], batch_sampler=batch_sampler,
+                                  generator=train_generator, **loader_options)
+        val_loader = DataLoader(subsets['validation'], shuffle=False, batch_size=batch_size,
+                                generator=val_generator, **loader_options)
         print("Experiment split: " + ", ".join(f"{k}={len(manifest[k])}" for k in ('train','validation','test')))
 
         if not loss_weight_schedule:
@@ -178,12 +182,14 @@ class BaseModel_dynamic(nn.Module):
                 best_val_physics = None
 
         start_epoch = 0
+        resume_progress = {}
         if resume_checkpoint_path:
             checkpoint_metadata = torch.load(resume_checkpoint_path, map_location="cpu")
             if checkpoint_metadata.get("protocol") != protocol:
                 raise ValueError("Checkpoint itself has incompatible experiment provenance.")
             if checkpoint_metadata.get("seed") != seed:
                 raise ValueError("Continuation must use the same seed as its source checkpoint.")
+            resume_progress = checkpoint_metadata.get("progress") or {}
             del checkpoint_metadata
             start_epoch = load_checkpoint(self, optimizer, resume_checkpoint_path, device)
             print(f"Resuming from checkpoint: {resume_checkpoint_path} (start_epoch={start_epoch})")
@@ -194,6 +200,9 @@ class BaseModel_dynamic(nn.Module):
         initial_model_state = torch.load(os.path.join(model_dir, "initial_state.pth"), map_location="cpu")
         update_run_config(config_path, {
             "git": git_provenance(), "protocol": protocol,
+            "training_complete": False, "loader_workers": loader_workers,
+            "loader": "job_local_mmap" if mmap_cache_dir else "zarr_lru",
+            "sampler": "seed_plus_epoch_randperm_v1",
             "loss_weight_schedule": loss_weight_schedule,
             "physics_residual_mode": physics_residual_mode,
             "epochs": num_epochs, "batch": batch_size, "lr": learning_rate,
@@ -214,105 +223,61 @@ class BaseModel_dynamic(nn.Module):
                 f"loss_weight_schedule must cover exactly num_epochs={num_epochs}, got {len(lp_by_epoch)} epochs."
             )
 
-        for epoch in range(start_epoch, num_epochs):
-            train_generator.manual_seed(seed + epoch)
-            criterion.lp_weight = float(lp_by_epoch[epoch])
-            criterion.mse_weight = float(mse_by_epoch[epoch])
-            train_loss = 0.0
-            train_mse = 0.0
-            train_physics = 0.0
-            train_objective_physics = 0.0
-            val_loss = 0.0
-            val_mse = 0.0
-            val_physics = 0.0
-            val_objective_physics = 0.0
-            train_samples = val_samples = 0
-            val_ic_squared_error = 0.0
-            val_ic_elements = 0
-            val_ic_max_abs_error = 0.0
+        remaining_budget = (max(0, max_runtime_seconds - (time.perf_counter() - tic))
+                            if max_runtime_seconds is not None else None)
+        with TrainingBudget(remaining_budget) as control:
+            for epoch in range(start_epoch, num_epochs):
+                train_generator.manual_seed(seed + epoch)
+                batch_sampler.epoch = epoch
+                batch_sampler.start_batch = int(resume_progress.get("next_batch", 0)) if epoch == start_epoch else 0
+                criterion.lp_weight = float(lp_by_epoch[epoch])
+                criterion.mse_weight = float(mse_by_epoch[epoch])
+                train_loss = 0.0
+                train_mse = 0.0
+                train_physics = 0.0
+                train_objective_physics = 0.0
+                val_loss = 0.0
+                val_mse = 0.0
+                val_physics = 0.0
+                val_objective_physics = 0.0
+                train_samples = val_samples = 0
+                val_ic_squared_error = 0.0
+                val_ic_elements = 0
+                val_ic_max_abs_error = 0.0
 
-            self.train()
-            loop = tqdm(train_loader, total=len(train_loader), leave=True)
-            for i, (input_tuple, target) in enumerate(loop):
-                # Dynamic batches carry T0, target past state, and the explicit
-                # source representation in addition to the integer target step. The
-                # dataloader intentionally provides both past and future ground
-                # truth frames so different physics residual variants can be
-                # tested on the same sample set.
-                input_t0, step_idx, target_past, target_future, source_mask, source_field = input_tuple
-                input_t0 = input_t0.to(device, dtype=train_dtype)
-                step_idx = step_idx.to(device)
-                tau, tau_past = _normalized_model_times(
-                    step_idx, dt, prediction_horizon, train_dtype
-                )
-                target_past = target_past.to(device, dtype=train_dtype)
-                target_future = target_future.to(device, dtype=train_dtype)
-                source_mask = source_mask.to(device, dtype=train_dtype)
-                source_field = source_field.to(device, dtype=train_dtype)
-                target = target.to(device, dtype=train_dtype)
+                if epoch == start_epoch and resume_progress:
+                    train_loss = resume_progress['train_loss']
+                    train_mse = resume_progress['train_mse']
+                    train_physics = resume_progress['train_physics']
+                    train_objective_physics = resume_progress['train_objective_physics']
+                    train_samples = resume_progress['train_samples']
+                next_batch = batch_sampler.start_batch
+                last_progress_save = time.monotonic()
 
-                output = self(input_t0, tau)
+                def save_progress():
+                    self.save_model(epoch, model_name, save_path, optimizer, progress=dict(
+                        next_batch=next_batch, train_loss=train_loss, train_mse=train_mse,
+                        train_physics=train_physics, train_objective_physics=train_objective_physics,
+                        train_samples=train_samples, sampler='seed_plus_epoch_randperm_v1'))
 
-                # Measure the same model-based residual for every variant.
-                # Only model-based objectives need gradients through the past.
-                if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
-                    diagnostic_past = self(input_t0, tau_past)
-                else:
-                    with torch.no_grad():
-                        diagnostic_past = self(input_t0, tau_past)
-                diagnostic_past = _anchor_initial_state(input_t0, diagnostic_past, step_idx)
-                output_past = diagnostic_past if criterion.physics_residual_mode in {
-                    "model_past", "soft_physics"
-                } else None
+                def pause_if_needed():
+                    if control.expired():
+                        save_progress()
+                        update_run_config(config_path, {"training_complete": False,
+                            "pause_epoch": epoch, "pause_next_batch": next_batch})
+                        accumulate_training_duration(config_path, time.perf_counter() - tic)
+                        print(f'Saved resumable checkpoint: epoch={epoch}, next_batch={next_batch}', flush=True)
+                        raise SystemExit(75)
 
-                loss, mse_loss, physics_loss = criterion.compute_components(
-                    input_t0=input_t0,
-                    output=output,
-                    output_past=output_past,
-                    target_past=target_past,
-                    target=target,
-                    target_future=target_future,
-                    source_mask=source_mask,
-                    source_field=source_field,
-                )
-
-                common_residual = physics_residual(
-                    output, diagnostic_past, dt, alpha, criterion.laplacian_layer, source_field
-                )
-                if i == 0:
-                    # Probe the selected regularizer even for the MSE control.
-                    _, _, measured_objective = criterion.compute_components(
-                        input_t0=input_t0, output=output, output_past=output_past,
-                        target_past=target_past, target=target, target_future=target_future,
-                        source_mask=source_mask, source_field=source_field, measure_physics=True
-                    )
-                    scales = loss_gradient_scales(self, mse_loss, measured_objective, criterion.lp_weight)
-                    scales.update(common_physics_loss=common_residual.detach().square().mean().item())
-                    scale_row = dict(run_id=run_id or model_name, epoch=epoch + 1,
-                                     samples=target.shape[0], lp_weight=criterion.lp_weight,
-                                     mse_weight=criterion.mse_weight, **scales)
-                    append_metrics_row(os.path.join(model_dir, "loss_gradient_scales.csv"),
-                                       list(scale_row), scale_row)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                batch_samples = target.shape[0]
-                train_samples += batch_samples
-                train_loss += loss.item() * batch_samples
-                train_mse += mse_loss.item() * batch_samples
-                train_physics += common_residual.detach().square().mean().item() * batch_samples
-                train_objective_physics += physics_loss.item() * batch_samples
-
-                loop.set_description(f"Epoch [{epoch}/{num_epochs}]")
-                loop.set_postfix(trainloss=train_loss / train_samples)
-
-            avg_train_loss = train_loss / train_samples
-            train_losses.append(avg_train_loss)
-
-            self.eval()
-            with torch.no_grad():
-                for input_tuple, target in val_loader:
+                pause_if_needed()
+                self.train()
+                loop = tqdm(train_loader, total=len(train_loader), leave=True)
+                for i, (input_tuple, target) in enumerate(loop):
+                    # Dynamic batches carry T0, target past state, and the explicit
+                    # source representation in addition to the integer target step. The
+                    # dataloader intentionally provides both past and future ground
+                    # truth frames so different physics residual variants can be
+                    # tested on the same sample set.
                     input_t0, step_idx, target_past, target_future, source_mask, source_field = input_tuple
                     input_t0 = input_t0.to(device, dtype=train_dtype)
                     step_idx = step_idx.to(device)
@@ -324,13 +289,21 @@ class BaseModel_dynamic(nn.Module):
                     source_mask = source_mask.to(device, dtype=train_dtype)
                     source_field = source_field.to(device, dtype=train_dtype)
                     target = target.to(device, dtype=train_dtype)
+
                     output = self(input_t0, tau)
-                    diagnostic_past = _anchor_initial_state(
-                        input_t0, self(input_t0, tau_past), step_idx
-                    )
+
+                    # Measure the same model-based residual for every variant.
+                    # Only model-based objectives need gradients through the past.
+                    if criterion.physics_residual_mode in {"model_past", "soft_physics"}:
+                        diagnostic_past = self(input_t0, tau_past)
+                    else:
+                        with torch.no_grad():
+                            diagnostic_past = self(input_t0, tau_past)
+                    diagnostic_past = _anchor_initial_state(input_t0, diagnostic_past, step_idx)
                     output_past = diagnostic_past if criterion.physics_residual_mode in {
                         "model_past", "soft_physics"
                     } else None
+
                     loss, mse_loss, physics_loss = criterion.compute_components(
                         input_t0=input_t0,
                         output=output,
@@ -341,107 +314,180 @@ class BaseModel_dynamic(nn.Module):
                         source_mask=source_mask,
                         source_field=source_field,
                     )
+
                     common_residual = physics_residual(
                         output, diagnostic_past, dt, alpha, criterion.laplacian_layer, source_field
                     )
+                    if batch_sampler.start_batch + i == 0:
+                        # Probe the selected regularizer even for the MSE control.
+                        _, _, measured_objective = criterion.compute_components(
+                            input_t0=input_t0, output=output, output_past=output_past,
+                            target_past=target_past, target=target, target_future=target_future,
+                            source_mask=source_mask, source_field=source_field, measure_physics=True
+                        )
+                        scales = loss_gradient_scales(self, mse_loss, measured_objective, criterion.lp_weight)
+                        scales.update(common_physics_loss=common_residual.detach().square().mean().item())
+                        scale_row = dict(run_id=run_id or model_name, epoch=epoch + 1,
+                                         samples=target.shape[0], lp_weight=criterion.lp_weight,
+                                         mse_weight=criterion.mse_weight, **scales)
+                        append_metrics_row(os.path.join(model_dir, "loss_gradient_scales.csv"),
+                                           list(scale_row), scale_row)
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
                     batch_samples = target.shape[0]
-                    val_samples += batch_samples
-                    val_loss += loss.item() * batch_samples
-                    val_mse += mse_loss.item() * batch_samples
-                    val_physics += common_residual.square().mean().item() * batch_samples
-                    val_objective_physics += physics_loss.item() * batch_samples
+                    train_samples += batch_samples
+                    train_loss += loss.item() * batch_samples
+                    train_mse += mse_loss.item() * batch_samples
+                    train_physics += common_residual.detach().square().mean().item() * batch_samples
+                    train_objective_physics += physics_loss.item() * batch_samples
+                    next_batch = batch_sampler.start_batch + i + 1
+                    if time.monotonic() - last_progress_save >= 900:
+                        save_progress()
+                        last_progress_save = time.monotonic()
+                    pause_if_needed()
 
-                    # Diagnose the model's own t=0 output independently of the
-                    # anchored residual, for every mode including MSE-only.
-                    output_initial = self(input_t0, torch.zeros_like(tau))
-                    initial_error = output_initial - input_t0[:, :1, ...]
-                    val_ic_squared_error += initial_error.square().sum().item()
-                    val_ic_elements += initial_error.numel()
-                    val_ic_max_abs_error = max(
-                        val_ic_max_abs_error, initial_error.abs().max().item()
-                    )
+                    loop.set_description(f"Epoch [{epoch}/{num_epochs}]")
+                    loop.set_postfix(trainloss=train_loss / train_samples)
 
-            avg_val_loss = val_loss / val_samples
-            val_losses.append(avg_val_loss)
-            avg_train_mse = train_mse / train_samples
-            avg_train_physics = train_physics / train_samples
-            avg_val_mse = val_mse / val_samples
-            avg_val_physics = val_physics / val_samples
+                avg_train_loss = train_loss / train_samples
+                train_losses.append(avg_train_loss)
 
-            os.makedirs(model_dir, exist_ok=True)
-            metrics_path = os.path.join(model_dir, "metrics.csv")
-            components_path = os.path.join(model_dir, "loss_components.csv")
-            header = ["run_id", "epoch", "train_loss", "val_loss", "lr", "lp_weight", "mse_weight", "channels", "batch", "seed"]
-            components_header = [
-                "run_id",
-                "epoch",
-                "train_mse_loss",
-                "train_physics_loss",
-                "val_mse_loss",
-                "val_physics_loss",
-                "lp_weight",
-                "mse_weight",
-                "physics_residual_mode",
-                "val_objective_physics_loss",
-                "train_objective_physics_loss",
-            ]
-            row = {
-                "run_id": run_id or model_name,
-                "epoch": epoch + 1,
-                "train_loss": avg_train_loss,
-                "val_loss": avg_val_loss,
-                "lr": learning_rate,
-                "lp_weight": float(criterion.lp_weight),
-                "mse_weight": float(criterion.mse_weight),
-                "channels": channels,
-                "batch": batch_size,
-                "seed": seed,
-            }
-            components_row = {
-                "run_id": run_id or model_name,
-                "epoch": epoch + 1,
-                "train_mse_loss": avg_train_mse,
-                "train_physics_loss": avg_train_physics,
-                "val_mse_loss": avg_val_mse,
-                "val_physics_loss": avg_val_physics,
-                "lp_weight": float(criterion.lp_weight),
-                "mse_weight": float(criterion.mse_weight),
-                "physics_residual_mode": criterion.physics_residual_mode,
-                "val_objective_physics_loss": val_objective_physics / val_samples if criterion.lp_weight != 0 else None,
-                "train_objective_physics_loss": train_objective_physics / train_samples if criterion.lp_weight != 0 else None,
-            }
-            append_metrics_row(metrics_path, header, row)
-            append_metrics_row(components_path, components_header, components_row)
-            # Keep diagnostics separate so resuming older runs does not change
-            # the column layout of their existing metrics CSVs.
-            val_ic_mse = val_ic_squared_error / val_ic_elements
-            append_metrics_row(
-                os.path.join(model_dir, "initial_condition_metrics.csv"),
-                ["run_id", "epoch", "val_ic_mse", "val_ic_max_abs_error"],
-                {
+                self.eval()
+                with torch.no_grad():
+                    for input_tuple, target in val_loader:
+                        pause_if_needed()
+                        input_t0, step_idx, target_past, target_future, source_mask, source_field = input_tuple
+                        input_t0 = input_t0.to(device, dtype=train_dtype)
+                        step_idx = step_idx.to(device)
+                        tau, tau_past = _normalized_model_times(
+                            step_idx, dt, prediction_horizon, train_dtype
+                        )
+                        target_past = target_past.to(device, dtype=train_dtype)
+                        target_future = target_future.to(device, dtype=train_dtype)
+                        source_mask = source_mask.to(device, dtype=train_dtype)
+                        source_field = source_field.to(device, dtype=train_dtype)
+                        target = target.to(device, dtype=train_dtype)
+                        output = self(input_t0, tau)
+                        diagnostic_past = _anchor_initial_state(
+                            input_t0, self(input_t0, tau_past), step_idx
+                        )
+                        output_past = diagnostic_past if criterion.physics_residual_mode in {
+                            "model_past", "soft_physics"
+                        } else None
+                        loss, mse_loss, physics_loss = criterion.compute_components(
+                            input_t0=input_t0,
+                            output=output,
+                            output_past=output_past,
+                            target_past=target_past,
+                            target=target,
+                            target_future=target_future,
+                            source_mask=source_mask,
+                            source_field=source_field,
+                        )
+                        common_residual = physics_residual(
+                            output, diagnostic_past, dt, alpha, criterion.laplacian_layer, source_field
+                        )
+                        batch_samples = target.shape[0]
+                        val_samples += batch_samples
+                        val_loss += loss.item() * batch_samples
+                        val_mse += mse_loss.item() * batch_samples
+                        val_physics += common_residual.square().mean().item() * batch_samples
+                        val_objective_physics += physics_loss.item() * batch_samples
+
+                        # Diagnose the model's own t=0 output independently of the
+                        # anchored residual, for every mode including MSE-only.
+                        output_initial = self(input_t0, torch.zeros_like(tau))
+                        initial_error = output_initial - input_t0[:, :1, ...]
+                        val_ic_squared_error += initial_error.square().sum().item()
+                        val_ic_elements += initial_error.numel()
+                        val_ic_max_abs_error = max(
+                            val_ic_max_abs_error, initial_error.abs().max().item()
+                        )
+
+                avg_val_loss = val_loss / val_samples
+                val_losses.append(avg_val_loss)
+                avg_train_mse = train_mse / train_samples
+                avg_train_physics = train_physics / train_samples
+                avg_val_mse = val_mse / val_samples
+                avg_val_physics = val_physics / val_samples
+
+                os.makedirs(model_dir, exist_ok=True)
+                metrics_path = os.path.join(model_dir, "metrics.csv")
+                components_path = os.path.join(model_dir, "loss_components.csv")
+                header = ["run_id", "epoch", "train_loss", "val_loss", "lr", "lp_weight", "mse_weight", "channels", "batch", "seed"]
+                components_header = [
+                    "run_id",
+                    "epoch",
+                    "train_mse_loss",
+                    "train_physics_loss",
+                    "val_mse_loss",
+                    "val_physics_loss",
+                    "lp_weight",
+                    "mse_weight",
+                    "physics_residual_mode",
+                    "val_objective_physics_loss",
+                    "train_objective_physics_loss",
+                ]
+                row = {
                     "run_id": run_id or model_name,
                     "epoch": epoch + 1,
-                    "val_ic_mse": val_ic_mse,
-                    "val_ic_max_abs_error": val_ic_max_abs_error,
-                },
-            )
-            print(
-                f"Initial condition (validation, normalized): "
-                f"MSE={val_ic_mse:.6e}, max_abs={val_ic_max_abs_error:.6e}"
-            )
-            is_best = best_val_mse is None or avg_val_mse < best_val_mse
-            best_val_mse = avg_val_mse if is_best else best_val_mse
-            best_val_physics = avg_val_physics if best_val_physics is None else min(best_val_physics, avg_val_physics)
-            update_run_config(
-                config_path,
-                {
-                    "best_val_mse_loss": float(best_val_mse),
-                    "best_val_physics_loss": float(best_val_physics),
-                },
-            )
-            self.save_model(epoch, model_name, save_path, optimizer, is_best=is_best,
-                            validation_mse=avg_val_mse)
+                    "train_loss": avg_train_loss,
+                    "val_loss": avg_val_loss,
+                    "lr": learning_rate,
+                    "lp_weight": float(criterion.lp_weight),
+                    "mse_weight": float(criterion.mse_weight),
+                    "channels": channels,
+                    "batch": batch_size,
+                    "seed": seed,
+                }
+                components_row = {
+                    "run_id": run_id or model_name,
+                    "epoch": epoch + 1,
+                    "train_mse_loss": avg_train_mse,
+                    "train_physics_loss": avg_train_physics,
+                    "val_mse_loss": avg_val_mse,
+                    "val_physics_loss": avg_val_physics,
+                    "lp_weight": float(criterion.lp_weight),
+                    "mse_weight": float(criterion.mse_weight),
+                    "physics_residual_mode": criterion.physics_residual_mode,
+                    "val_objective_physics_loss": val_objective_physics / val_samples if criterion.lp_weight != 0 else None,
+                    "train_objective_physics_loss": train_objective_physics / train_samples if criterion.lp_weight != 0 else None,
+                }
+                append_metrics_row(metrics_path, header, row)
+                append_metrics_row(components_path, components_header, components_row)
+                # Keep diagnostics separate so resuming older runs does not change
+                # the column layout of their existing metrics CSVs.
+                val_ic_mse = val_ic_squared_error / val_ic_elements
+                append_metrics_row(
+                    os.path.join(model_dir, "initial_condition_metrics.csv"),
+                    ["run_id", "epoch", "val_ic_mse", "val_ic_max_abs_error"],
+                    {
+                        "run_id": run_id or model_name,
+                        "epoch": epoch + 1,
+                        "val_ic_mse": val_ic_mse,
+                        "val_ic_max_abs_error": val_ic_max_abs_error,
+                    },
+                )
+                print(
+                    f"Initial condition (validation, normalized): "
+                    f"MSE={val_ic_mse:.6e}, max_abs={val_ic_max_abs_error:.6e}"
+                )
+                is_best = best_val_mse is None or avg_val_mse < best_val_mse
+                best_val_mse = avg_val_mse if is_best else best_val_mse
+                best_val_physics = avg_val_physics if best_val_physics is None else min(best_val_physics, avg_val_physics)
+                update_run_config(
+                    config_path,
+                    {
+                        "best_val_mse_loss": float(best_val_mse),
+                        "best_val_physics_loss": float(best_val_physics),
+                    },
+                )
+                self.save_model(epoch, model_name, save_path, optimizer, is_best=is_best,
+                                validation_mse=avg_val_mse)
 
+        update_run_config(config_path, {"training_complete": True})
         metrics_path = os.path.join(save_path, model_name, "metrics.csv")
         epochs_all, train_losses_all, val_losses_all = load_loss_history_from_metrics(metrics_path)
         if not epochs_all:
@@ -451,23 +497,14 @@ class BaseModel_dynamic(nn.Module):
         proc_time = self.save_proc_time(model_name, tic, save_path)
         accumulate_training_duration(config_path, proc_time)
 
-    def save_model(self, epoch, model_name, save_path, optimizer, is_best=False, validation_mse=None):
+    def save_model(self, epoch, model_name, save_path, optimizer, is_best=False, validation_mse=None, progress=None):
         model_dir = os.path.join(save_path, model_name)
         os.makedirs(model_dir, exist_ok=True)
 
-        base_model_path = os.path.join(model_dir, f"epoch_{epoch}.pth")
-        if os.path.exists(base_model_path):
-            i = 1
-            new_model_path = os.path.join(model_dir, f"epoch_{epoch + i}.pth")
-            while os.path.exists(new_model_path):
-                i += 1
-                new_model_path = os.path.join(model_dir, f"epoch_{epoch + i}.pth")
-            model_path = new_model_path
-        else:
-            model_path = base_model_path
+        model_path = os.path.join(model_dir, f"epoch_{epoch}.pth")
 
         checkpoint = {
-            "epoch": epoch,
+            "epoch": epoch, "epoch_complete": progress is None, "progress": progress,
             "model_state_dict": self.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "validation_mse": validation_mse,
@@ -478,12 +515,13 @@ class BaseModel_dynamic(nn.Module):
             "torch_rng_state": torch.get_rng_state(),
             "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         }
-        torch.save(checkpoint, model_path)
+        if progress is None:
+            atomic_torch_save(checkpoint, model_path)
 
         latest_model_path = os.path.join(model_dir, f"{model_name}.pth")
-        torch.save(checkpoint, latest_model_path)
+        atomic_torch_save(checkpoint, latest_model_path)
         if is_best:
-            torch.save(checkpoint, os.path.join(model_dir, "best.pth"))
+            atomic_torch_save(checkpoint, os.path.join(model_dir, "best.pth"))
 
     def save_loss_plot(self, model_name, epochs, train_losses, val_losses, save_path):
         plt.figure(figsize=(10, 5))

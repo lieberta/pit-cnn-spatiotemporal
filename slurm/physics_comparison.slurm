@@ -6,6 +6,8 @@
 #SBATCH --cpus-per-task=36
 #SBATCH --partition=small_gpu
 #SBATCH --time=23:59:00
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@900
 #SBATCH --output=logs/%x_%A_%a.out
 #SBATCH --error=logs/%x_%A_%a.err
 
@@ -55,6 +57,35 @@ elif [[ "$mode" == training ]]; then
     variants=(A B C D E)
     export PITCNN_SEED=$((42 + index / 5))
     export PITCNN_VARIANT="${variants[index % 5]}"
+    export PITCNN_RUN_POINTER="$output_dir/run_${PITCNN_VARIANT}_seed${PITCNN_SEED}.json"
+    export PITCNN_RESUME_RUN_ID
+    PITCNN_RESUME_RUN_ID=$(python - "$PITCNN_RUN_POINTER" <<'PY'
+import json
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+if p.exists():
+    record = json.loads(p.read_text())
+    folder = Path(record['run_dir'])
+    cfg = json.loads((folder / 'config.json').read_text())
+    if cfg.get('training_complete'):
+        print('COMPLETE')
+    elif (folder / (record['run_id'] + '.pth')).is_file():
+        print(record['run_id'])
+PY
+)
+    if [[ "$PITCNN_RESUME_RUN_ID" == COMPLETE ]]; then
+        echo "Already completed variant=$PITCNN_VARIANT seed=$PITCNN_SEED"
+        exit 0
+    fi
+    cache_dir=$(mktemp -d "${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/pitcnn-${SLURM_JOB_ID}.XXXXXX")
+    export PITCNN_MMAP_CACHE_DIR="$cache_dir"
+    export PITCNN_MAX_RUNTIME_SECONDS=79200
+    # Optional one-time integration check on the first array task only.
+    if [[ -n "${PITCNN_FIRST_SEGMENT_SECONDS:-}" && "${SLURM_RESTART_COUNT:-0}" == 0 && "$index" == 0 ]]; then
+        export PITCNN_MAX_RUNTIME_SECONDS="$PITCNN_FIRST_SEGMENT_SECONDS"
+    fi
+    trap 'rm -rf -- "$cache_dir"' EXIT
     export PITCNN_SOFT_WEIGHT
     PITCNN_SOFT_WEIGHT=$(python - "$output_dir" <<'PY'
 import json
@@ -64,7 +95,25 @@ print(json.loads((Path(sys.argv[1]) / 'calibration_choice.json').read_text())['c
 PY
 )
     echo "Starting variant=$PITCNN_VARIANT seed=$PITCNN_SEED job=$SLURM_JOB_ID"
-    python main.py --config configs/pitcnn_steel_comparison.py
+    python main.py --config configs/pitcnn_steel_comparison.py &
+    training_pid=$!
+    trap 'kill -USR1 "$training_pid" 2>/dev/null || true' USR1
+    while true; do
+        if wait "$training_pid"; then
+            result=0
+            break
+        else
+            result=$?
+            if ! kill -0 "$training_pid" 2>/dev/null; then break; fi
+        fi
+    done
+    if (( result == 75 )); then
+        echo "Checkpoint saved; requeueing job $SLURM_JOB_ID for continuation."
+        scontrol requeue "$SLURM_JOB_ID"
+        exit 0
+    elif (( result != 0 )); then
+        exit "$result"
+    fi
     echo "Completed variant=$PITCNN_VARIANT seed=$PITCNN_SEED job=$SLURM_JOB_ID"
 else
     echo "Unknown mode: $mode" >&2

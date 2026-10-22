@@ -424,6 +424,7 @@ class HeatEquationMultiDataset_dynamic(Dataset):
         self.files = []
         self.data_cache = OrderedDict()
         self.cache_size = int(cache_size)
+        self.mmap_cache = {}
         self.base_path = base_path
         self.modulo = int(modulo)
         self.max_experiments = None if max_experiments is None else int(max_experiments)
@@ -516,11 +517,49 @@ class HeatEquationMultiDataset_dynamic(Dataset):
             self.data_cache.move_to_end(store_path)
             return self.data_cache[store_path]
 
-        payload = self._load_experiment_payload(folder, store_path)
+        if store_path in self.mmap_cache:
+            directory = self.mmap_cache[store_path]
+            payload = {key: np.load(os.path.join(directory, key + '.npy'), mmap_mode='r')
+                       for key in ('temperature', 'T0', 'source_mask', 'source_field')}
+        else:
+            payload = self._load_experiment_payload(folder, store_path)
         if self.cache_size > 0 and len(self.data_cache) >= self.cache_size:
             self.data_cache.popitem(last=False)
         self.data_cache[store_path] = payload
         return payload
+
+    def prepare_mmap_cache(self, directory, experiments):
+        """Stage normalized arrays once; workers share the OS page cache.
+
+        Only the explicitly requested training/validation experiments are read.
+        Use a private job-local directory, with identical training normalization.
+        """
+        from pathlib import Path
+        import hashlib
+        stores = {store: folder for folder, store, _ in self.files
+                  if Path(folder).name in experiments}
+        root = Path(directory)
+        root.mkdir(parents=True, exist_ok=True)
+        self.data_cache.clear()
+        for store, folder in sorted(stores.items()):
+            identity = json.dumps(dict(store=os.path.abspath(store), min=self.min_temp,
+                                       max=self.max_temp, dtype=str(get_np_dtype()),
+                                       metadata=load_experiment_metadata(folder)), sort_keys=True)
+            target = root / hashlib.sha256(identity.encode()).hexdigest()
+            target.mkdir(exist_ok=True)
+            marker = target / 'ready.json'
+            if not marker.is_file():
+                payload = self._load_experiment_payload(folder, store)
+                for key, value in payload.items():
+                    temporary = target / (key + '.partial.npy')
+                    np.save(temporary, np.asarray(value, dtype=get_np_dtype()))
+                    os.replace(temporary, target / (key + '.npy'))
+                marker.write_text(identity)
+                del payload
+            elif marker.read_text() != identity:
+                raise ValueError('Memory-map cache metadata mismatch.')
+            self.mmap_cache[store] = str(target)
+        print(f'Prepared job-local memory maps for {len(stores)} experiments.', flush=True)
 
     def _load_experiment_payload(self, folder, store_path):
         """Load all required tensors for one experiment from zarr and metadata."""

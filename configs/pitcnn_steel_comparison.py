@@ -28,5 +28,5 @@ data_modulo = 1
 data_max_experiments = None
 data_experiment_offset = 0
 split_manifest_path = "splits/steel_train_medium.json"
-resume_run_ids_dynamic = []
+resume_run_ids_dynamic = [os.environ["PITCNN_RESUME_RUN_ID"]] if os.environ.get("PITCNN_RESUME_RUN_ID") else []
 auto_collect_dynamic = False

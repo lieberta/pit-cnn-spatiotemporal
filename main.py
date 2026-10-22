@@ -206,6 +206,9 @@ def dynamic(
     split_seed=42,
     training_source_counts=None,
     config_source=None,
+    loader_workers=4,
+    mmap_cache_dir=None,
+    max_runtime_seconds=None,
 ):
 
     # a function that takes all important parameter as input, creates and trains the model
@@ -298,6 +301,14 @@ def dynamic(
             config["comment"] = comment
         write_run_config(model_dir, config)
 
+    pointer_path = os.environ.get('PITCNN_RUN_POINTER')
+    if pointer_path:
+        pointer = Path(pointer_path)
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        temporary = pointer.with_suffix('.tmp')
+        temporary.write_text(json.dumps(dict(run_id=run_id, run_dir=str(Path(model_dir).resolve()))))
+        os.replace(temporary, pointer)
+
     # Validate that all required parameters are present before training
     required = {
         "loss_weight_schedule": loss_weight_schedule,
@@ -353,7 +364,8 @@ def dynamic(
                       resume_checkpoint_path=resume_checkpoint_path,
                       physics_residual_mode=physics_residual_mode,
                       split_manifest_path=split_manifest_path, split_seed=split_seed,
-                      training_source_counts=training_source_counts)
+                      training_source_counts=training_source_counts, loader_workers=loader_workers,
+                      mmap_cache_dir=mmap_cache_dir, max_runtime_seconds=max_runtime_seconds)
 
 
 if __name__ == '__main__':
@@ -401,7 +413,11 @@ if __name__ == '__main__':
         split_options = dict(split_manifest_path=cfg.split_manifest_path,
                              split_seed=int(cfg.split_seed),
                              training_source_counts=cfg.training_source_counts,
-                             config_source=args.config)
+                             config_source=args.config,
+                             loader_workers=int(getattr(cfg, "loader_workers", 4)),
+                             mmap_cache_dir=os.environ.get("PITCNN_MMAP_CACHE_DIR"),
+                             max_runtime_seconds=float(os.environ["PITCNN_MAX_RUNTIME_SECONDS"])
+                             if "PITCNN_MAX_RUNTIME_SECONDS" in os.environ else None)
 
     # Validate model_class_name and determine mode
     if model_class_name not in MODEL_CLASS_REGISTRY:

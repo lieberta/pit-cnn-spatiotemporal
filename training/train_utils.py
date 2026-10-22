@@ -36,7 +36,7 @@ def load_checkpoint(model, optimizer, checkpoint_path, device):
             state = checkpoint["numpy_rng_state"]
             np.random.set_state((state[0], np.asarray(state[1], dtype=np.uint32),
                                  state[2], state[3], state[4]))
-        start_epoch = checkpoint.get("epoch", -1) + 1
+        start_epoch = checkpoint.get("epoch", -1) + int(checkpoint.get("epoch_complete", True))
         return start_epoch
     model.load_state_dict(checkpoint)
     return 0
@@ -210,3 +210,51 @@ def loss_gradient_scales(model, data_loss, physics_loss, physics_weight):
                 physics_to_data_gradient=physics_norm / data_norm if data_norm > 0 else None,
                 weighted_physics_to_data_gradient=(physics_weight * physics_norm / data_norm
                                                   if data_norm > 0 else None))
+
+
+def atomic_torch_save(value, path):
+    """Readers see either the old or the complete new checkpoint."""
+    temporary = str(path) + '.tmp'
+    torch.save(value, temporary)
+    os.replace(temporary, path)
+
+
+class EpochBatchSampler:
+    """Deterministic per-epoch ordering, resumable without reading skipped data."""
+    def __init__(self, size, batch_size, seed):
+        self.size, self.batch_size, self.seed = size, batch_size, seed
+        self.epoch = self.start_batch = 0
+
+    def __iter__(self):
+        generator = torch.Generator().manual_seed(self.seed + self.epoch)
+        indices = torch.randperm(self.size, generator=generator).tolist()
+        for offset in range(self.start_batch * self.batch_size, self.size, self.batch_size):
+            yield indices[offset:offset+self.batch_size]
+
+    def __len__(self):
+        return max(0, (self.size + self.batch_size - 1)//self.batch_size - self.start_batch)
+
+
+class TrainingBudget:
+    """Stop at a batch boundary on a deadline or Slurm's advance warning."""
+    def __init__(self, seconds):
+        self.deadline = time.monotonic() + seconds if seconds is not None else float('inf')
+        self.requested = False
+
+    def __enter__(self):
+        import signal
+        self.previous = {}
+        for sig in (signal.SIGUSR1, signal.SIGTERM):
+            self.previous[sig] = signal.signal(sig, self._request)
+        return self
+
+    def _request(self, *_):
+        self.requested = True
+
+    def expired(self):
+        return self.requested or time.monotonic() >= self.deadline
+
+    def __exit__(self, *_):
+        import signal
+        for sig, handler in self.previous.items():
+            signal.signal(sig, handler)

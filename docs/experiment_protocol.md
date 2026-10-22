@@ -215,3 +215,43 @@ Dirty-Status und Diff-Hash vom Einreichungsrechner. Die Herkunftsmethode wird
 als `submission_host_snapshot` markiert; ohne Snapshot bricht die Erfassung ab.
 Während der Kampagne den Quellstand nicht verändern. Der Slurm-Starter erwartet
 die Datei `source_provenance.json` im Ausgabeordner der Kampagne.
+
+## Datenladen und Fortsetzung vor dem Slurm-Zeitlimit
+
+Für die Slurm-Kampagne werden nach der Train-only-Normierung ausschließlich
+Trainings- und Validierungsexperimente einmalig in normalisierte NPY-Dateien
+im privaten lokalen Job-Verzeichnis geschrieben (hier etwa 4 GB). Vier
+persistente Worker lesen sie per Memory-Mapping; der Betriebssystem-Cache wird
+gemeinsam verwendet. Ein Cache-Miss öffnet damit eine Datei, statt die gesamte
+Zarr-Simulation erneut zu dekodieren. Der Cache enthält die aktive Temperatur-
+präzision und wird nach Jobende gelöscht; Originaldaten bleiben unverändert.
+
+Die zufällige Reihenfolge wird explizit pro Epoche mit seed+epoch festgelegt.
+Die Fortsetzung kann bereits verarbeitete Batches überspringen, ohne deren
+Daten zu laden. Für den Wechsel vom alten Sampler wurden die drei alten Läufe
+vor der ersten vollständig gespeicherten Epoche gestoppt und neu gestartet.
+Alle Varianten erhalten dadurch denselben neuen Sampler.
+
+Jeder Job speichert nach spätestens 22 Stunden an der nächsten Batchgrenze
+atomar seinen Zustand und beendet Python mit Code 75. Slurm reiht denselben
+Array-Task über `scontrol requeue` erneut ein. Seine Laufzeit beginnt neu;
+Run-ID und Trainingsfortschritt bleiben erhalten. Die Grenze bleibt 23:59
+Stunden pro Zuweisung. Zusätzlich wird 15 Minuten vor dieser Grenze SIGUSR1
+an den Python-Prozess weitergereicht. Ein einzelner blockierender Batch oder
+ein defektes Dateisystem kann dennoch die Sicherung verzögern; periodische
+Checkpoints begrenzen dann normalerweise den Verlust auf etwa 15 Minuten.
+
+Der Checkpoint enthält Modell, Optimizer, Python-/NumPy-/Torch-Zufallszustände,
+Epoche, nächste Batchposition und laufende Loss-Summen/Sampleanzahl. Validation
+wird bei einer Unterbrechung vollständig wiederholt. Nur abgeschlossene
+Epochen beeinflussen die Best-Auswahl. Pro Run zeigen Dateien
+`run_VARIANTE_seedSEED.json` im Kampagnenordner auf die fortzusetzende Run-ID;
+ein fertiger Run wird beim Neustart erkannt und übersprungen.
+
+Ein Integrationstest unterbricht mitten in einer Epoche und vergleicht nach
+Fortsetzung Gewichte und Epochenmetriken exakt mit ununterbrochenem Training
+(einschließlich Dropout). Ein weiterer Test prüft identische Samples aus dem
+Memory-Map-Cache und dass kein erneutes Zarr-Laden stattfindet. Alle 16 Tests
+bestehen. `PITCNN_FIRST_SEGMENT_SECONDS` kann beim Einreichen den ersten Abschnitt
+von Task 0 verkürzen, um das tatsächliche Slurm-Requeue einmalig zu prüfen;
+nach dem ersten Neustart gilt wieder das normale 22-Stunden-Budget.
