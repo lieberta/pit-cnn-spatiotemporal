@@ -18,6 +18,7 @@ export MPLCONFIGDIR="${TMPDIR:-/tmp}/pitcnn-matplotlib-${SLURM_JOB_ID}"
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=4
 output_dir="${1:?Campaign output directory required}"
+export PITCNN_GIT_PROVENANCE_FILE="$output_dir/source_provenance.json"
 mode="${2:?Expected calibration or training}"
 
 if [[ "$mode" == calibration ]]; then

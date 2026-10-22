@@ -208,3 +208,10 @@ jeden Gradienten deterministisch mit Faktor 1/8 auf die acht Eingabezellen.
 Der Vergleich mit nativen CPU-Werten und -Gradienten besteht. Zusammen bestehen
 alle 14 lokalen Tests; die GPU-Kalibrierung prüft zusätzlich den vollständigen
 Modellgradienten vor dem Training.
+
+Auf Rechenknoten ohne Git muss `PITCNN_GIT_PROVENANCE_FILE` auf einen vor der
+Einreichung erzeugten Snapshot zeigen. Dieser enthält Repositorypfad, Commit,
+Dirty-Status und Diff-Hash vom Einreichungsrechner. Die Herkunftsmethode wird
+als `submission_host_snapshot` markiert; ohne Snapshot bricht die Erfassung ab.
+Während der Kampagne den Quellstand nicht verändern. Der Slurm-Starter erwartet
+die Datei `source_provenance.json` im Ausgabeordner der Kampagne.

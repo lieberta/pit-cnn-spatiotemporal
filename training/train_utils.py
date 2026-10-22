@@ -161,7 +161,21 @@ def git_provenance():
     root = Path(__file__).resolve().parents[1]
     def git(*args):
         return subprocess.check_output(['git', '-C', str(root), *args])
-    status = git('status', '--porcelain').decode()
+    try:
+        status = git('status', '--porcelain').decode()
+    except FileNotFoundError:
+        # Some compute nodes omit Git. Require explicit provenance captured
+        # on the submission host instead of silently inventing a revision.
+        snapshot = os.environ.get('PITCNN_GIT_PROVENANCE_FILE')
+        if not snapshot:
+            raise RuntimeError('Git unavailable; provide PITCNN_GIT_PROVENANCE_FILE.')
+        record = json.loads(Path(snapshot).read_text())
+        if record.get('repository_root') != str(root):
+            raise ValueError('Submission provenance belongs to another repository.')
+        for key in ('commit', 'dirty', 'status', 'tracked_diff_sha256'):
+            if key not in record:
+                raise ValueError(f'Submission provenance is missing {key}.')
+        return dict(record, capture_method='submission_host_snapshot')
     return dict(commit=git('rev-parse', 'HEAD').decode().strip(), dirty=bool(status),
                 status=status, tracked_diff_sha256=hashlib.sha256(git('diff', 'HEAD')).hexdigest())
 
