@@ -200,3 +200,11 @@ Vorwärtswerte unverändert, summiert im Rückwärtslauf jedoch die reflektierte
 Randbeiträge durch geordnete Slice-Additionen. Der Test vergleicht Werte und
 Gradienten mit dem nativen CPU-Padding, einschließlich asymmetrischer Ränder.
 Nach dieser Startkorrektur bestanden alle 13 lokalen Tests.
+
+Die GPU-Kalibrierung zeigte danach denselben PyTorch-2.0.1-Fehler auch bei
+`avg_pool3d_backward_cuda`. Für das ausschließlich verwendete nichtüberlappende
+2×2×2-Pooling bleibt der native Vorwärtslauf erhalten; der Rückwärtslauf verteilt
+jeden Gradienten deterministisch mit Faktor 1/8 auf die acht Eingabezellen.
+Der Vergleich mit nativen CPU-Werten und -Gradienten besteht. Zusammen bestehen
+alle 14 lokalen Tests; die GPU-Kalibrierung prüft zusätzlich den vollständigen
+Modellgradienten vor dem Training.

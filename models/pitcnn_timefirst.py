@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from training.deterministic_padding import ReflectionConv3d
+from training.deterministic_padding import ReflectionConv3d, AveragePool3d2
 
 from training.train_pitcnn_dynamic import BaseModel_dynamic
 
@@ -20,7 +20,7 @@ class PITCNN_dynamic_timefirst(BaseModel_dynamic):
         self.gn11 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
         self.conv12 = ReflectionConv3d(c, c, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn12 = nn.GroupNorm(num_groups=int(c / 8), num_channels=c)
-        self.avgpool = nn.AvgPool3d(kernel_size=2, stride=2)
+        self.avgpool = AveragePool3d2()
 
         self.conv21 = ReflectionConv3d(c, c * 2, kernel_size=3, padding=1, padding_mode="reflect")
         self.gn21 = nn.GroupNorm(num_groups=int(c * 2 / 8), num_channels=c * 2)

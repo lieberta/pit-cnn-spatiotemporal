@@ -36,3 +36,26 @@ class ReflectionConv3d(nn.Conv3d):
             return super()._conv_forward(value, weight, bias)
         padded = _ReflectionPad3d.apply(value, self._reversed_padding_repeated_twice)
         return F.conv3d(padded, weight, bias, self.stride, 0, self.dilation, self.groups)
+
+
+class _AveragePool2(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, value):
+        if any(size % 2 for size in value.shape[-3:]):
+            raise ValueError('Deterministic 2x pooling requires even spatial dimensions.')
+        return F.avg_pool3d(value, kernel_size=2, stride=2)
+
+    @staticmethod
+    def backward(ctx, gradient):
+        # Disjoint 2x2x2 blocks: each input gets exactly one eighth of
+        # its block's gradient. No scatter or overlapping writes are needed.
+        result = gradient / 8
+        for axis in (-3, -2, -1):
+            result = result.repeat_interleave(2, dim=axis)
+        return result
+
+
+class AveragePool3d2(nn.Module):
+    """Fixed non-overlapping 2x pooling with deterministic CUDA backward."""
+    def forward(self, value):
+        return _AveragePool2.apply(value)

@@ -1,7 +1,7 @@
 {
   "commit": "ec48b21",
   "launcher": "slurm/physics_comparison.slurm",
-  "calibration_job": 1459640,
+  "calibration_job": 1459691,
   "partition": "small_gpu",
   "seeds": [
     42,
@@ -16,13 +16,16 @@
     "E"
   ],
   "max_parallel_trainings": 3,
-  "dependency": "afterok:1459640",
+  "dependency": "afterok:1459691",
   "local_launcher_uncommitted": false,
-  "training_array_job": 1459642,
+  "training_array_job": 1459693,
   "failed_initial_jobs": [
     1459598,
     1459600,
     1459604,
-    1459606
-  ]
+    1459606,
+    1459640,
+    1459642
+  ],
+  "source_revision_description": "Deterministic reflection and non-overlapping average-pooling backward"
 }
